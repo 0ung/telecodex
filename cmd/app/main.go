@@ -73,7 +73,7 @@ func main() {
 	}
 
 	tg := telegram.NewClient(cfg.BotToken)
-	manager := session.NewManager(cfg.WorkspaceDir, cfg.CodexPath, cfg.Model, logger)
+	manager := session.NewManager(cfg.WorkspaceDir, cfg.Model, logger)
 	defer manager.Shutdown()
 
 	progressUI := newTelegramUI(tg, logger, messageRenderer)

@@ -15,7 +15,6 @@ type Config struct {
 	AllowedUserID     int64  `yaml:"allowed_user_id"`
 	Language          string `yaml:"language"`
 	Model             string `yaml:"model"`
-	CodexPath         string `yaml:"codex_path"`
 	WorkspaceDir      string `yaml:"workspace_dir"`
 	PollTimeoutSec    int    `yaml:"poll_timeout_sec"`
 	ProgressUpdateSec int    `yaml:"progress_update_sec"`
@@ -49,9 +48,6 @@ func Load(path string) (Config, error) {
 	}
 	if !filepath.IsAbs(cfg.LogFile) {
 		cfg.LogFile = filepath.Clean(filepath.Join(baseDir, cfg.LogFile))
-	}
-	if cfg.CodexPath != "" {
-		cfg.CodexPath = filepath.Clean(cfg.CodexPath)
 	}
 	cfg.Language = normalizeLanguage(cfg.Language)
 	cfg.Model = strings.TrimSpace(cfg.Model)
@@ -91,15 +87,6 @@ func (c Config) Validate() error {
 	}
 	if c.Language != "en" && c.Language != "ko" {
 		return errors.New("config: language must be 'en' or 'ko'")
-	}
-	if c.CodexPath != "" {
-		info, err := os.Stat(c.CodexPath)
-		if err != nil {
-			return fmt.Errorf("config: codex_path check failed: %w", err)
-		}
-		if info.IsDir() {
-			return errors.New("config: codex_path must be a file")
-		}
 	}
 	return nil
 }

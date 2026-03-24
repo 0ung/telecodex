@@ -42,7 +42,6 @@ type Update struct {
 
 type Manager struct {
 	workspaceDir string
-	codexPath    string
 	model        string
 	logger       *log.Logger
 
@@ -53,10 +52,9 @@ type Manager struct {
 	updates chan Update
 }
 
-func NewManager(workspaceDir, codexPath, model string, logger *log.Logger) *Manager {
+func NewManager(workspaceDir, model string, logger *log.Logger) *Manager {
 	return &Manager{
 		workspaceDir: workspaceDir,
-		codexPath:    codexPath,
 		model:        model,
 		logger:       logger,
 		current: Snapshot{
@@ -93,7 +91,7 @@ func (m *Manager) StartTask(ctx context.Context, prompt string) error {
 	m.mu.Unlock()
 	m.publish()
 
-	client, err := codex.Start(ctx, m.logger, m.codexPath, m.model)
+	client, err := codex.Start(ctx, m.logger, m.model)
 	if err != nil {
 		m.fail(err)
 		return err

@@ -58,8 +58,8 @@ type Client struct {
 	writeMu sync.Mutex
 }
 
-func Start(ctx context.Context, logger *log.Logger, configuredPath, model string) (*Client, error) {
-	spec, err := resolveCodexCommand(configuredPath)
+func Start(ctx context.Context, logger *log.Logger, model string) (*Client, error) {
+	spec, err := resolveCodexCommand()
 	if err != nil {
 		return nil, err
 	}
@@ -388,14 +388,7 @@ func getString(root map[string]any, path ...string) (string, bool) {
 	return s, ok
 }
 
-func resolveCodexCommand(configuredPath string) (commandSpec, error) {
-	if configuredPath != "" {
-		if _, err := os.Stat(configuredPath); err == nil {
-			return buildCommandSpec(configuredPath), nil
-		}
-		return commandSpec{}, fmt.Errorf("configured codex_path not found: %s", configuredPath)
-	}
-
+func resolveCodexCommand() (commandSpec, error) {
 	if runtime.GOOS != "windows" {
 		return commandSpec{name: "codex"}, nil
 	}
@@ -434,7 +427,7 @@ func resolveCodexCommand(configuredPath string) (commandSpec, error) {
 		return buildCommandSpec(execPath), nil
 	}
 
-	return commandSpec{}, errors.New("could not locate a runnable codex command")
+	return commandSpec{}, errors.New("could not locate codex. Install the official codex CLI first and make sure the command is available.")
 }
 
 func buildCommandSpec(path string) commandSpec {
