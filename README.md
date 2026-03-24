@@ -152,9 +152,3 @@ Windows에서는 `telecodex.exe`를 실행하면 됩니다.
 - Telegram → long polling
 - telecodex → 로컬 실행
 - Codex → workspace에서 작업
-
----
-
-## 라이선스
-
-MIT
