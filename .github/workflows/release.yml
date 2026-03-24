@@ -1,0 +1,134 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+
+permissions:
+  contents: write
+
+jobs:
+  verify:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+
+      - name: Build
+        shell: pwsh
+        run: go build ./...
+
+  build:
+    needs: verify
+    runs-on: windows-latest
+    strategy:
+      matrix:
+        include:
+          - goos: windows
+            goarch: amd64
+            binary_name: telecodex.exe
+          - goos: windows
+            goarch: arm64
+            binary_name: telecodex.exe
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.25"
+
+      - name: Build bundle
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $asset = "telecodex_${{ matrix.goos }}_${{ matrix.goarch }}"
+          $bundleDir = Join-Path "dist" $asset
+
+          New-Item -ItemType Directory -Force -Path $bundleDir | Out-Null
+
+          $env:GOOS = "${{ matrix.goos }}"
+          $env:GOARCH = "${{ matrix.goarch }}"
+          $env:CGO_ENABLED = "0"
+
+          go build -trimpath -ldflags="-s -w -H=windowsgui" -o (Join-Path $bundleDir "${{ matrix.binary_name }}") ./cmd/app
+
+          Copy-Item README.md -Destination (Join-Path $bundleDir "README.md")
+          Copy-Item LICENSE -Destination (Join-Path $bundleDir "LICENSE")
+
+          $configTemplate = @'
+          bot_token: "1234567890:AAEXAMPLE_REPLACE_ME"
+          allowed_user_id: 123456789
+          language: "ko"
+          model: ""
+          codex_path: "C:/Users/your-name/AppData/Roaming/npm/codex.cmd"
+          workspace_dir: "C:/Users/your-name/work/my-project"
+          poll_timeout_sec: 30
+          progress_update_sec: 2
+          log_file: "./app.log"
+          '@
+
+          Set-Content -Path (Join-Path $bundleDir "config.yaml") -Value $configTemplate -NoNewline
+
+          Compress-Archive -Path $bundleDir -DestinationPath (Join-Path "dist" ($asset + ".zip")) -Force
+
+      - name: Upload packaged bundle
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/*.zip
+
+  checksums:
+    needs: build
+    runs-on: windows-latest
+    steps:
+      - name: Download bundled artifacts
+        uses: actions/download-artifact@v8
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Generate SHA256SUMS
+        shell: pwsh
+        run: |
+          $lines = Get-ChildItem dist\*.zip |
+            Sort-Object Name |
+            ForEach-Object {
+              $hash = (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+              "$hash *$($_.Name)"
+            }
+          $lines | Set-Content dist\SHA256SUMS.txt
+
+      - name: Upload checksum artifact
+        uses: actions/upload-artifact@v6
+        with:
+          name: checksums
+          path: dist/SHA256SUMS.txt
+
+  release:
+    if: startsWith(github.ref, 'refs/tags/')
+    needs:
+      - build
+      - checksums
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download bundles
+        uses: actions/download-artifact@v8
+        with:
+          path: release-assets
+          merge-multiple: true
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          name: Telecodex ${{ github.ref_name }}
+          prerelease: ${{ contains(github.ref_name, 'beta') }}
+          files: release-assets/*

@@ -1,0 +1,8 @@
+app.log
+telecodex.lock
+telegram-codex.lock
+config.yaml
+dist/
+qa-dist/
+/telecodex.exe
+.codex-schema/
