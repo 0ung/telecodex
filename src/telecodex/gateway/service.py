@@ -30,7 +30,7 @@ class GatewayService:
             return
 
         if text.startswith("/run "):
-            self._run_command(message.conversation_id, message.sender_id, text[5:].strip())
+            self._run_command(message.channel, message.conversation_id, message.sender_id, text[5:].strip())
             return
         if text == "/status":
             self._status_command(message.conversation_id)
@@ -50,9 +50,16 @@ class GatewayService:
         if text in {"/help", "/start"}:
             self.chat.send_message(message.conversation_id, self._help_text())
             return
-        self._run_command(message.conversation_id, message.sender_id, text, attachments=attachments)
+        self._run_command(message.channel, message.conversation_id, message.sender_id, text, attachments=attachments)
 
-    def _run_command(self, conversation_id: str, user_id: int, goal: str, attachments: list[JobAttachment] | None = None) -> None:
+    def _run_command(
+        self,
+        channel: str,
+        conversation_id: str,
+        user_id: int,
+        goal: str,
+        attachments: list[JobAttachment] | None = None,
+    ) -> None:
         attachments = attachments or []
         if not goal and not attachments:
             self.chat.send_message(conversation_id, "Usage: /run <goal> or send a photo with a caption.")
@@ -63,6 +70,8 @@ class GatewayService:
                     goal=goal or "Analyze the attached image input.",
                     requester_id=user_id,
                     workspace_path=".",
+                    channel=channel,
+                    conversation_id=conversation_id,
                     text_only=not attachments,
                     requires_private_network=True,
                     attachments=attachments,

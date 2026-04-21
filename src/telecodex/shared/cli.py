@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
 import subprocess
 import time
 from pathlib import Path
 from typing import Any
+
+import httpx
 
 from telecodex.shared.config import AdapterConfig
 from telecodex.shared.models import (
@@ -34,7 +37,7 @@ class JsonCliAdapter:
         if self.dry_run:
             return self._execute_mock(request_json, response_type)
 
-        if not self.config.command:
+        if self.config.protocol != "codex_responses_local_shell" and not self.config.command:
             raise CliExecutionError(f"{self.name} adapter requires command when dry_run is false")
 
         attempts = self.config.retries + 1
@@ -43,16 +46,17 @@ class JsonCliAdapter:
             started = utc_now()
             started_monotonic = time.perf_counter()
             try:
-                response_json, stdout, stderr, exit_code, executed_args = self._run_process(payload, request_json)
+                response_json, stdout, stderr, exit_code, executed_args, provider_response_id = self._run_process(payload, request_json)
                 parsed = response_type.model_validate(json.loads(response_json))
                 finished = utc_now()
                 execution = CommandExecution(
-                    command=self.config.command,
+                    command=self.config.command or self.name,
                     args=executed_args,
                     stdout=stdout,
                     stderr=stderr,
                     exit_code=exit_code,
                     duration_ms=int((time.perf_counter() - started_monotonic) * 1000),
+                    provider_response_id=provider_response_id,
                     started_at=started,
                     finished_at=finished,
                 )
@@ -97,7 +101,9 @@ class JsonCliAdapter:
         )
         return parsed, exchange
 
-    def _run_process(self, payload: dict[str, Any], request_json: str) -> tuple[str, str, str, int, list[str]]:
+    def _run_process(self, payload: dict[str, Any], request_json: str) -> tuple[str, str, str, int, list[str], str]:
+        if self.config.protocol == "codex_responses_local_shell":
+            return self._run_openai_local_shell(payload, request_json)
         env = {**os.environ, **self.config.env}
         args = self._build_args(payload)
         stdin_payload = self._render_input(payload, request_json)
@@ -112,7 +118,7 @@ class JsonCliAdapter:
             check=False,
         )
         response_json = self._extract_response_json(completed.stdout)
-        return response_json, completed.stdout, completed.stderr, completed.returncode, args[1:]
+        return response_json, completed.stdout, completed.stderr, completed.returncode, args[1:], ""
 
     def _resolve_cwd(self, payload: dict[str, Any]) -> str | None:
         if self.config.protocol == "codex_exec_jsonl":
@@ -143,6 +149,8 @@ class JsonCliAdapter:
                 args.extend(["-C", project_path])
             args.append("-")
             return args
+        if self.config.protocol == "codex_responses_local_shell":
+            return ["responses", self.config.model or "codex-mini-latest", "local_shell"]
         args = [self.config.command, *self.config.args]
         if self.config.model:
             args.extend(["--model", self.config.model])
@@ -153,10 +161,216 @@ class JsonCliAdapter:
             return _render_gemini_prompt(request_json)
         if self.config.protocol == "codex_exec_jsonl":
             return _render_codex_prompt(request_json)
+        if self.config.protocol == "codex_responses_local_shell":
+            return _render_codex_prompt(request_json)
         if not self.config.prompt_template:
             return request_json
         template = Path(self.config.prompt_template).read_text(encoding="utf-8")
         return template.replace("{request_json}", request_json)
+
+    def _run_openai_local_shell(self, payload: dict[str, Any], request_json: str) -> tuple[str, str, str, int, list[str], str]:
+        env = {**os.environ, **self.config.env}
+        api_key = self._resolve_openai_api_key(env)
+        if not api_key:
+            raise CliExecutionError("OPENAI_API_KEY is not configured for the Codex Responses API adapter")
+
+        model = self.config.model or "codex-mini-latest"
+        tool_spec = {"type": "local_shell"}
+        request_body: dict[str, Any] = {
+            "model": model,
+            "tools": [tool_spec],
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "input_text",
+                            "text": self._render_input(payload, request_json),
+                        }
+                    ],
+                }
+            ],
+        }
+        previous_response_id = str(payload.get("previous_response_id", "")).strip()
+        if previous_response_id:
+            request_body["previous_response_id"] = previous_response_id
+
+        response_trace: list[str] = []
+        latest_response: dict[str, Any] | None = None
+        base_url = self.config.api_base_url.rstrip("/")
+        headers = {
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+        }
+
+        while True:
+            response = httpx.post(
+                f"{base_url}/responses",
+                headers=headers,
+                json=request_body,
+                timeout=self.config.timeout_sec,
+            )
+            response.raise_for_status()
+            latest_response = response.json()
+            response_trace.append(json.dumps(latest_response, ensure_ascii=False))
+
+            shell_calls = self._extract_local_shell_calls(latest_response)
+            if not shell_calls:
+                break
+
+            output_items = [self._execute_local_shell_call(call, payload, env) for call in shell_calls]
+            latest_response_id = str(latest_response.get("id", "")).strip()
+            request_body = {
+                "model": model,
+                "tools": [tool_spec],
+                "previous_response_id": latest_response_id,
+                "input": output_items,
+            }
+
+        if latest_response is None:
+            raise CliExecutionError("Codex Responses API returned no payload")
+
+        final_text = self._extract_openai_message_text(latest_response)
+        response_json = _extract_last_json_blob(final_text)
+        provider_response_id = str(latest_response.get("id", "")).strip()
+        return response_json, "\n".join(response_trace), "", 0, [model, "local_shell"], provider_response_id
+
+    def _extract_local_shell_calls(self, response_payload: dict[str, Any]) -> list[dict[str, Any]]:
+        shell_calls: list[dict[str, Any]] = []
+        for item in response_payload.get("output", []):
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("type")
+            if item_type == "local_shell_call":
+                shell_calls.append(item)
+            elif item_type == "tool_call" and item.get("tool_name") == "local_shell":
+                shell_calls.append(item)
+        return shell_calls
+
+    def _execute_local_shell_call(self, call: dict[str, Any], payload: dict[str, Any], env: dict[str, str]) -> dict[str, Any]:
+        call_id = str(call.get("call_id", "")).strip()
+        args = call.get("action") or call.get("arguments") or {}
+        if not isinstance(args, dict):
+            args = {}
+        command = args.get("command")
+        command_argv = self._normalize_command(command)
+        output = ""
+
+        if not command_argv:
+            output = "No command was provided by the Codex shell tool."
+        else:
+            allowed, reason = self._is_shell_command_allowed(command_argv, payload)
+            if not allowed:
+                output = reason
+            else:
+                runtime_env = {
+                    key: value
+                    for key, value in env.items()
+                    if key not in {"OPENAI_API_KEY"}
+                }
+                runtime_env.update({str(key): str(value) for key, value in (args.get("env") or {}).items()})
+                timeout_sec = self._resolve_shell_timeout(args)
+                working_directory = str(args.get("working_directory") or payload.get("project_path") or "").strip() or None
+                try:
+                    completed = subprocess.run(
+                        command_argv,
+                        cwd=working_directory,
+                        env=runtime_env,
+                        capture_output=True,
+                        text=True,
+                        timeout=timeout_sec,
+                        check=False,
+                    )
+                    output = (completed.stdout or "") + (completed.stderr or "")
+                    if not output.strip():
+                        output = f"Command exited with code {completed.returncode}."
+                except subprocess.TimeoutExpired as exc:
+                    output = ((exc.stdout or "") + (exc.stderr or "")).strip()
+                    if output:
+                        output += "\n"
+                    output += f"Command timed out after {timeout_sec} seconds."
+                except Exception as exc:  # noqa: BLE001
+                    output = f"Command execution failed: {exc}"
+
+        return {
+            "type": "local_shell_call_output",
+            "call_id": call_id,
+            "output": output,
+        }
+
+    def _resolve_openai_api_key(self, env: dict[str, str]) -> str:
+        api_key = env.get("OPENAI_API_KEY", "").strip()
+        if api_key:
+            return api_key
+        home = Path(env.get("HOME", str(Path.home())))
+        auth_path = home / ".codex" / "auth.json"
+        if auth_path.exists():
+            try:
+                payload = json.loads(auth_path.read_text(encoding="utf-8"))
+            except json.JSONDecodeError as exc:
+                raise CliExecutionError(f"invalid Codex auth.json: {exc}") from exc
+            embedded_key = str(payload.get("OPENAI_API_KEY", "")).strip()
+            if embedded_key:
+                return embedded_key
+        return ""
+
+    @staticmethod
+    def _normalize_command(command: Any) -> list[str]:
+        if isinstance(command, str):
+            return shlex.split(command)
+        if isinstance(command, list):
+            return [str(item) for item in command if str(item).strip()]
+        return []
+
+    def _resolve_shell_timeout(self, args: dict[str, Any]) -> float | None:
+        timeout_ms = args.get("timeout_ms")
+        if timeout_ms is None:
+            return self.config.timeout_sec or None
+        try:
+            timeout_sec = max(float(timeout_ms) / 1000.0, 1.0)
+        except (TypeError, ValueError):
+            return self.config.timeout_sec or None
+        if self.config.timeout_sec:
+            return min(timeout_sec, float(self.config.timeout_sec))
+        return timeout_sec
+
+    @staticmethod
+    def _extract_openai_message_text(response_payload: dict[str, Any]) -> str:
+        texts: list[str] = []
+        top_level_output_text = str(response_payload.get("output_text", "")).strip()
+        if top_level_output_text:
+            texts.append(top_level_output_text)
+        for item in response_payload.get("output", []):
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") != "message":
+                continue
+            for content_item in item.get("content", []):
+                if not isinstance(content_item, dict):
+                    continue
+                if content_item.get("type") not in {"output_text", "text"}:
+                    continue
+                text_value = content_item.get("text", "")
+                if isinstance(text_value, dict):
+                    text_value = text_value.get("value", "")
+                text_value = str(text_value).strip()
+                if text_value:
+                    texts.append(text_value)
+        if texts:
+            return "\n".join(texts)
+        raise CliExecutionError("Codex Responses API did not return a final assistant message")
+
+    @staticmethod
+    def _is_shell_command_allowed(command_argv: list[str], payload: dict[str, Any]) -> tuple[bool, str]:
+        prefix = command_argv[0]
+        policy = payload.get("execution_policy") or {}
+        allow = [str(item) for item in policy.get("allow_commands", [])]
+        deny = [str(item) for item in policy.get("deny_commands", [])]
+        if deny and prefix in deny:
+            return False, f"Command '{prefix}' is denied by execution policy."
+        if allow and prefix not in allow:
+            return False, f"Command '{prefix}' is not allowed by execution policy."
+        return True, ""
 
     def _extract_response_json(self, stdout: str) -> str:
         text = stdout.strip()

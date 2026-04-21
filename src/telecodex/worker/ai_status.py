@@ -36,17 +36,20 @@ class AiRuntimeStatusService:
         )
 
     def _build_codex_status(self) -> ProviderRuntimeStatus:
-        message, auth_ok = self._codex_login_status()
+        auth_mode, message, auth_ok = self._codex_auth_status()
         usage = self._load_latest_usage("codex")
         notes = []
         if usage is None:
-            notes.append("Last known token usage is unavailable until a Codex CLI run completes.")
-        notes.append("Codex CLI does not expose remaining ChatGPT/API balance through `login status`.")
+            notes.append("Last known token usage is unavailable until a Codex run completes.")
+        if self.cfg.codex.protocol == "codex_responses_local_shell":
+            notes.append("Codex session chaining uses the Responses API previous_response_id flow.")
+        else:
+            notes.append("Codex CLI does not expose remaining ChatGPT/API balance through `login status`.")
         return ProviderRuntimeStatus(
             provider="codex",
             configured_model=self._configured_model(self.cfg.codex, default="default"),
             auth_ok=auth_ok,
-            auth_mode="chatgpt" if auth_ok else "",
+            auth_mode=auth_mode,
             auth_message=message,
             dry_run=self.cfg.dry_run,
             last_usage=usage,
@@ -77,9 +80,14 @@ class AiRuntimeStatusService:
             notes=notes,
         )
 
-    def _codex_login_status(self) -> tuple[str, bool]:
+    def _codex_auth_status(self) -> tuple[str, str, bool]:
+        if self.cfg.codex.protocol == "codex_responses_local_shell":
+            api_key = self._resolve_codex_api_key(self._adapter_env(self.cfg.codex))
+            if api_key:
+                return "api_key", "Codex Responses API key is configured for the worker runtime.", True
+            return "none", "Codex Responses API key is not configured for the worker runtime.", False
         if not self.cfg.codex.command:
-            return "Codex command is not configured.", False
+            return "none", "Codex command is not configured.", False
         try:
             completed = subprocess.run(
                 [self.cfg.codex.command, "login", "status"],
@@ -90,9 +98,9 @@ class AiRuntimeStatusService:
                 check=False,
             )
         except Exception as exc:  # noqa: BLE001
-            return f"Unable to query Codex auth: {exc}", False
+            return "none", f"Unable to query Codex auth: {exc}", False
         message = (completed.stderr or completed.stdout).strip() or "Unknown Codex auth status."
-        return message, completed.returncode == 0
+        return ("chatgpt" if completed.returncode == 0 else "none"), message, completed.returncode == 0
 
     def _gemini_auth_status(self) -> tuple[str, str, bool]:
         env = self._adapter_env(self.cfg.gemini)
@@ -109,6 +117,19 @@ class AiRuntimeStatusService:
 
     def _adapter_env(self, adapter: AdapterConfig) -> dict[str, str]:
         return {**os.environ, **adapter.env}
+
+    def _resolve_codex_api_key(self, env: dict[str, str]) -> str:
+        api_key = env.get("OPENAI_API_KEY", "").strip()
+        if api_key:
+            return api_key
+        auth_path = Path(env.get("HOME", str(Path.home()))) / ".codex" / "auth.json"
+        if not auth_path.exists():
+            return ""
+        try:
+            payload = json.loads(auth_path.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            return ""
+        return str(payload.get("OPENAI_API_KEY", "")).strip()
 
     def _configured_model(self, adapter: AdapterConfig, default: str) -> str:
         if adapter.model.strip():
@@ -141,6 +162,8 @@ class AiRuntimeStatusService:
         return None
 
     def _parse_codex_usage(self, stdout: str, observed_at: str | None) -> ProviderUsage | None:
+        if self.cfg.codex.protocol == "codex_responses_local_shell":
+            return self._parse_codex_responses_usage(stdout, observed_at)
         for line in reversed(stdout.splitlines()):
             line = line.strip()
             if not line:
@@ -159,6 +182,32 @@ class AiRuntimeStatusService:
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
                 total_tokens=input_tokens + output_tokens,
+                cached_input_tokens=cached_input_tokens,
+                requests=1,
+                observed_at=observed_at,
+            )
+        return None
+
+    def _parse_codex_responses_usage(self, stdout: str, observed_at: str | None) -> ProviderUsage | None:
+        for line in reversed(stdout.splitlines()):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            usage = payload.get("usage") or {}
+            if not usage:
+                continue
+            input_tokens = int(usage.get("input_tokens", 0))
+            output_tokens = int(usage.get("output_tokens", 0))
+            total_tokens = int(usage.get("total_tokens", input_tokens + output_tokens))
+            cached_input_tokens = int(usage.get("cached_input_tokens", 0))
+            return ProviderUsage(
+                input_tokens=input_tokens,
+                output_tokens=output_tokens,
+                total_tokens=total_tokens,
                 cached_input_tokens=cached_input_tokens,
                 requests=1,
                 observed_at=observed_at,

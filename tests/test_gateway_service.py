@@ -34,7 +34,11 @@ class FakeChat:
 
 
 class FakeWorker:
+    def __init__(self) -> None:
+        self.last_request: JobRequest | None = None
+
     def create_job(self, request: JobRequest) -> JobCreateResponse:
+        self.last_request = request
         return JobCreateResponse(job_id="job-1", state=JobState.QUEUED)
 
     def list_jobs(self) -> JobListResponse:
@@ -77,6 +81,7 @@ def test_gateway_service_rejects_non_text() -> None:
 
 def test_gateway_service_starts_job_from_plain_text() -> None:
     chat = FakeChat()
+    worker = FakeWorker()
     service = GatewayService(
         cfg=GatewayConfig(
             telegram_token="token",
@@ -84,10 +89,13 @@ def test_gateway_service_starts_job_from_plain_text() -> None:
             worker_base_url="http://worker",
         ),
         chat=chat,
-        worker=FakeWorker(),
+        worker=worker,
     )
     service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text="build this"))
     assert "job-1" in chat.messages[-1][1]
+    assert worker.last_request is not None
+    assert worker.last_request.channel == "telegram"
+    assert worker.last_request.conversation_id == "10"
 
 
 def test_gateway_service_starts_job_from_photo_caption() -> None:
