@@ -28,3 +28,21 @@ class TelegramClient:
             timeout=self.timeout_sec,
         )
         response.raise_for_status()
+
+    def get_file(self, file_id: str) -> dict[str, Any]:
+        response = httpx.get(
+            f"{self.base_url}/getFile",
+            params={"file_id": file_id},
+            timeout=self.timeout_sec,
+        )
+        response.raise_for_status()
+        body = response.json()
+        return body["result"]
+
+    def download_file(self, file_path: str) -> bytes:
+        response = httpx.get(
+            f"https://api.telegram.org/file/{self.base_url.split('/bot', 1)[1]}/{file_path}",
+            timeout=self.timeout_sec,
+        )
+        response.raise_for_status()
+        return response.content

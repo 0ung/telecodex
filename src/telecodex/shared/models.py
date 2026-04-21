@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from enum import Enum
+from pathlib import Path
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -200,6 +201,22 @@ class JobRequest(BaseModel):
     workspace_path: str
     text_only: bool = True
     requires_private_network: bool = True
+    attachments: list["JobAttachment"] = Field(default_factory=list)
+
+
+class JobAttachment(BaseModel):
+    kind: str
+    file_name: str
+    mime_type: str = "application/octet-stream"
+    telegram_file_id: str = ""
+    telegram_file_unique_id: str = ""
+    telegram_file_path: str = ""
+    content_base64: str = ""
+
+    @property
+    def safe_file_name(self) -> str:
+        cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in self.file_name).strip("._")
+        return cleaned or "attachment.bin"
 
 
 class JobSummary(BaseModel):
@@ -366,3 +383,15 @@ class MockAdapterResponse(BaseModel):
 
 
 GeminiRequest.model_rebuild()
+JobRequest.model_rebuild()
+
+
+def infer_mime_type(path: str, fallback: str = "application/octet-stream") -> str:
+    suffix = Path(path).suffix.lower()
+    if suffix in {".jpg", ".jpeg"}:
+        return "image/jpeg"
+    if suffix == ".png":
+        return "image/png"
+    if suffix == ".webp":
+        return "image/webp"
+    return fallback

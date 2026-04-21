@@ -15,6 +15,12 @@ class FakeTelegram:
     def send_message(self, chat_id: int, text: str) -> None:
         self.messages.append((chat_id, text))
 
+    def get_file(self, file_id: str):  # noqa: ANN001
+        return {"file_id": file_id, "file_path": "photos/test.jpg"}
+
+    def download_file(self, file_path: str) -> bytes:  # noqa: ANN001
+        return b"image-bytes"
+
 
 class FakeWorker:
     def create_job(self, request: JobRequest) -> JobCreateResponse:
@@ -43,7 +49,7 @@ def test_gateway_service_rejects_non_text() -> None:
         worker=FakeWorker(),
     )
     service._handle_message({"chat": {"id": 10, "type": "private"}, "from": {"id": 1}})
-    assert telegram.messages[-1][1] == "Only text requests are supported."
+    assert telegram.messages[-1][1] == "Send text, a photo, or both."
 
 
 def test_gateway_service_starts_job_from_plain_text() -> None:
@@ -59,3 +65,28 @@ def test_gateway_service_starts_job_from_plain_text() -> None:
     )
     service._handle_message({"chat": {"id": 10, "type": "private"}, "from": {"id": 1}, "text": "build this"})
     assert "job-1" in telegram.messages[-1][1]
+
+
+def test_gateway_service_starts_job_from_photo_caption() -> None:
+    telegram = FakeTelegram()
+    service = GatewayService(
+        cfg=GatewayConfig(
+            telegram_token="token",
+            allowed_user_ids=[1],
+            worker_base_url="http://worker",
+        ),
+        telegram=telegram,
+        worker=FakeWorker(),
+    )
+    service._handle_message(
+        {
+            "chat": {"id": 10, "type": "private"},
+            "from": {"id": 1},
+            "caption": "analyze this image",
+            "photo": [
+                {"file_id": "small", "file_unique_id": "u1"},
+                {"file_id": "large", "file_unique_id": "u2"},
+            ],
+        }
+    )
+    assert "attachment" in telegram.messages[-1][1]

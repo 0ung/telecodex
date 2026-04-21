@@ -82,6 +82,7 @@ class WorkerOrchestrator:
             started_at=started_at,
         )
         store.save_metadata(metadata)
+        store.save_job_request(state.request)
 
         rolling = RollingSummary()
         latest_codex = CodexResult()

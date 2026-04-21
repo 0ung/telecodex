@@ -1,11 +1,12 @@
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass
 
 from telecodex.gateway.telegram import TelegramClient
 from telecodex.gateway.worker_client import WorkerClient
 from telecodex.shared.config import GatewayConfig
-from telecodex.shared.models import JobDetail, JobRequest
+from telecodex.shared.models import JobAttachment, JobDetail, JobRequest, infer_mime_type
 
 
 @dataclass
@@ -34,8 +35,10 @@ class GatewayService:
             return
 
         text = (message.get("text") or "").strip()
-        if not text:
-            self.telegram.send_message(chat_id, "Only text requests are supported.")
+        caption = (message.get("caption") or "").strip()
+        attachments = self._extract_attachments(message)
+        if not text and not caption and not attachments:
+            self.telegram.send_message(chat_id, "Send text, a photo, or both.")
             return
 
         if text.startswith("/run "):
@@ -56,23 +59,27 @@ class GatewayService:
         if text in {"/help", "/start"}:
             self.telegram.send_message(chat_id, self._help_text())
             return
-        self._run_command(chat_id, user_id, text)
+        goal = text or caption
+        self._run_command(chat_id, user_id, goal, attachments=attachments)
 
-    def _run_command(self, chat_id: int, user_id: int, goal: str) -> None:
-        if not goal:
-            self.telegram.send_message(chat_id, "Usage: /run <goal>")
+    def _run_command(self, chat_id: int, user_id: int, goal: str, attachments: list[JobAttachment] | None = None) -> None:
+        attachments = attachments or []
+        if not goal and not attachments:
+            self.telegram.send_message(chat_id, "Usage: /run <goal> or send a photo with a caption.")
             return
         try:
             response = self.worker.create_job(
                 JobRequest(
-                    goal=goal,
+                    goal=goal or "Analyze the attached image input.",
                     requester_id=user_id,
                     workspace_path=".",
-                    text_only=True,
+                    text_only=not attachments,
                     requires_private_network=True,
+                    attachments=attachments,
                 )
             )
-            self.telegram.send_message(chat_id, f"Job `{response.job_id}` started with state `{response.state.value}`.")
+            attachment_suffix = f" with {len(attachments)} attachment(s)" if attachments else ""
+            self.telegram.send_message(chat_id, f"Job `{response.job_id}` started with state `{response.state.value}`{attachment_suffix}.")
         except Exception as exc:  # noqa: BLE001
             self.telegram.send_message(chat_id, f"Failed to start job: {exc}")
 
@@ -128,6 +135,8 @@ class GatewayService:
             f"State: `{detail.summary.state.value}`",
             f"Goal: {detail.summary.goal}",
         ]
+        if detail.request.attachments:
+            lines.append(f"Attachments: {len(detail.request.attachments)}")
         if detail.summary.final_status:
             lines.append(f"Final status: `{detail.summary.final_status.value}`")
         if detail.summary.final_summary:
@@ -144,9 +153,48 @@ class GatewayService:
         return "\n".join(
             [
                 "/run <goal> - start a new worker job",
+                "Send a photo with a caption - create an image-backed job",
                 "/status - show the latest run status",
                 "/runs - list recent jobs",
                 "/show <job_id> - show one run in detail",
                 "/stop <job_id> - cancel a running job",
             ]
+        )
+
+    def _extract_attachments(self, message: dict) -> list[JobAttachment]:
+        attachments: list[JobAttachment] = []
+        photo_sizes = message.get("photo") or []
+        if photo_sizes:
+            selected = photo_sizes[-1]
+            attachment = self._download_attachment(
+                file_id=selected["file_id"],
+                file_unique_id=selected.get("file_unique_id", ""),
+                fallback_name=f"telegram-photo-{selected['file_id']}.jpg",
+                kind="photo",
+            )
+            attachments.append(attachment)
+        document = message.get("document")
+        if isinstance(document, dict):
+            attachments.append(
+                self._download_attachment(
+                    file_id=document["file_id"],
+                    file_unique_id=document.get("file_unique_id", ""),
+                    fallback_name=document.get("file_name", f"telegram-document-{document['file_id']}"),
+                    kind="document",
+                )
+            )
+        return attachments
+
+    def _download_attachment(self, file_id: str, file_unique_id: str, fallback_name: str, kind: str) -> JobAttachment:
+        file_meta = self.telegram.get_file(file_id)
+        file_path = file_meta["file_path"]
+        content = self.telegram.download_file(file_path)
+        return JobAttachment(
+            kind=kind,
+            file_name=fallback_name,
+            mime_type=infer_mime_type(file_path),
+            telegram_file_id=file_id,
+            telegram_file_unique_id=file_unique_id,
+            telegram_file_path=file_path,
+            content_base64=base64.b64encode(content).decode("ascii"),
         )
