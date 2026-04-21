@@ -1,0 +1,19 @@
+services:
+  gateway:
+    build:
+      context: ..
+      dockerfile: docker/gateway.Dockerfile
+    environment:
+      TELECODEX_TELEGRAM_TOKEN: "${TELECODEX_TELEGRAM_TOKEN}"
+      TELECODEX_WORKER_TOKEN: "${TELECODEX_WORKER_TOKEN}"
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ..
+      dockerfile: docker/worker.Dockerfile
+    environment:
+      TELECODEX_WORKER_TOKEN: "${TELECODEX_WORKER_TOKEN}"
+    volumes:
+      - ../.runs-python:/app/.runs-python
+    restart: unless-stopped
