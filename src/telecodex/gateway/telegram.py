@@ -7,7 +7,9 @@ import httpx
 
 class TelegramClient:
     def __init__(self, token: str, timeout_sec: int = 30) -> None:
+        self.token = token
         self.base_url = f"https://api.telegram.org/bot{token}"
+        self.file_base_url = f"https://api.telegram.org/file/bot{token}"
         self.timeout_sec = timeout_sec
 
     def get_updates(self, offset: int | None, timeout_sec: int) -> list[dict[str, Any]]:
@@ -41,7 +43,7 @@ class TelegramClient:
 
     def download_file(self, file_path: str) -> bytes:
         response = httpx.get(
-            f"https://api.telegram.org/file/{self.base_url.split('/bot', 1)[1]}/{file_path}",
+            f"{self.file_base_url}/{file_path}",
             timeout=self.timeout_sec,
         )
         response.raise_for_status()
