@@ -235,6 +235,7 @@ class JobDetail(BaseModel):
     summary: JobSummary
     request: JobRequest
     result: FinalResult | None = None
+    turns: list[TurnRecord] = Field(default_factory=list)
     rolling_summary: RollingSummary | None = None
     audit_log: list[AuditEvent] = Field(default_factory=list)
     report_path: str = ""

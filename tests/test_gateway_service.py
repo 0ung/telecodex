@@ -3,7 +3,23 @@ from __future__ import annotations
 from telecodex.gateway.interfaces import IncomingMessage
 from telecodex.gateway.service import GatewayService
 from telecodex.shared.config import GatewayConfig
-from telecodex.shared.models import AIStatusResponse, JobAttachment, JobCreateResponse, JobDetail, JobListResponse, JobRequest, JobState, JobSummary, ProviderQuota, ProviderRuntimeStatus
+from telecodex.shared.models import (
+    AIStatusResponse,
+    CodexResult,
+    CodexStatus,
+    GeminiResponse,
+    GeminiStatus,
+    JobAttachment,
+    JobCreateResponse,
+    JobDetail,
+    JobListResponse,
+    JobRequest,
+    JobState,
+    JobSummary,
+    ProviderQuota,
+    ProviderRuntimeStatus,
+    TurnRecord,
+)
 
 
 class FakeChat:
@@ -133,3 +149,51 @@ def test_gateway_service_shows_ai_status() -> None:
     service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text="/ai status"))
     assert "AI Runtime Status" in chat.messages[-1][1]
     assert "gemini-2.5-flash-lite" in chat.messages[-1][1]
+
+
+def test_gateway_service_status_shows_recent_ai_dialogue() -> None:
+    class RichStatusWorker(FakeWorker):
+        def list_jobs(self) -> JobListResponse:
+            return JobListResponse(jobs=[JobSummary(job_id="job-9", state=JobState.RUNNING, goal="ship the status update")])
+
+        def get_job(self, job_id: str) -> JobDetail:
+            summary = JobSummary(job_id=job_id, state=JobState.RUNNING, goal="ship the status update")
+            turns = [
+                TurnRecord(
+                    turn_number=1,
+                    gemini=GeminiResponse(
+                        status=GeminiStatus.CONTINUE,
+                        summary_for_user="Plan the next code change.",
+                        instruction_for_codex="Update the status formatter.",
+                    ),
+                    codex=CodexResult(
+                        status=CodexStatus.SUCCESS,
+                        summary="Updated the formatter and tests.",
+                        next_step="Verify the Telegram output.",
+                    ),
+                )
+            ]
+            return JobDetail(
+                summary=summary,
+                request=JobRequest(goal=summary.goal, requester_id=1, workspace_path="."),
+                turns=turns,
+            )
+
+    chat = FakeChat()
+    service = GatewayService(
+        cfg=GatewayConfig(
+            telegram_token="token",
+            allowed_user_ids=[1],
+            worker_base_url="http://worker",
+        ),
+        chat=chat,
+        worker=RichStatusWorker(),
+    )
+
+    service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text="/status"))
+
+    status_text = chat.messages[-1][1]
+    assert "Goal: ship the status update" in status_text
+    assert "Current turn: 2" in status_text
+    assert "Gemini: Plan the next code change." in status_text
+    assert "Codex: Updated the formatter and tests." in status_text

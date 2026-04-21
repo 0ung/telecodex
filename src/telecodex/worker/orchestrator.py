@@ -87,6 +87,8 @@ class WorkerOrchestrator:
         rolling = RollingSummary()
         latest_codex = CodexResult()
         turns: list[TurnRecord] = []
+        state.detail.rolling_summary = rolling
+        state.detail.turns = []
         failures = 0
         final_status: FinalStatus | None = None
         final_reason = ""
@@ -172,6 +174,9 @@ class WorkerOrchestrator:
                 latest_codex = codex_resp
                 rolling = update_rolling_summary(rolling, turn_record)
                 rolling.codex_failures = failures
+                state.detail.summary = state.summary
+                state.detail.turns = list(turns)
+                state.detail.rolling_summary = rolling
                 store.save_summary(rolling)
 
                 if failures > self.cfg.max_codex_failures:
@@ -220,6 +225,7 @@ class WorkerOrchestrator:
                 summary=state.summary,
                 request=state.request,
                 result=result,
+                turns=turns,
                 rolling_summary=rolling,
                 audit_log=state.detail.audit_log,
                 report_path=report_path,
@@ -255,6 +261,7 @@ class WorkerOrchestrator:
                 summary=state.summary,
                 request=state.request,
                 result=result,
+                turns=turns,
                 rolling_summary=rolling,
                 audit_log=state.detail.audit_log,
                 report_path=report_path,

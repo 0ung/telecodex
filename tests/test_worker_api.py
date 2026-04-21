@@ -45,6 +45,8 @@ def test_worker_api_creates_and_reads_job(tmp_path) -> None:
     loaded = client.get(f"/jobs/{job_id}", headers={"X-Worker-Token": "secret"})
     assert loaded.status_code == 200
     assert loaded.json()["summary"]["job_id"] == job_id
+    assert loaded.json()["turns"][0]["gemini"]["summary_for_user"] == "Starting Codex from the initial user goal."
+    assert loaded.json()["turns"][0]["codex"]["summary"] == "done"
 
 
 def test_worker_api_reports_ai_status(tmp_path) -> None:

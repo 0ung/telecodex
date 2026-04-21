@@ -44,3 +44,5 @@ def test_worker_orchestrator_completes_dry_run(tmp_path) -> None:
     assert result.summary.state == JobState.COMPLETED
     assert result.result is not None
     assert result.result.final_summary == "Implementation finished."
+    assert result.turns[0].gemini.summary_for_user == "Starting Codex from the initial user goal."
+    assert result.turns[0].codex.summary == "Implementation finished."
