@@ -1,8 +1,13 @@
+.venv/
+.pytest_cache/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.codex/
+.runs-python/
+archive/*.zip
 app.log
 telecodex.lock
 telegram-codex.lock
-config.yaml
-dist/
-qa-dist/
-/telecodex.exe
 .codex-schema/

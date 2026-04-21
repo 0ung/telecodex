@@ -1,0 +1,11 @@
+.git
+.github
+.codex
+.venv
+.pytest_cache
+__pycache__
+*.pyc
+*.pyo
+*.pyd
+.runs-python
+archive
