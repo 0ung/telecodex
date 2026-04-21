@@ -88,6 +88,7 @@ class WorkerOrchestrator:
 
         conversation_key = self._conversation_key(state.request)
         previous_response_id = self.sessions.get_previous_response_id(conversation_key)
+        thread_id = self.sessions.get_thread_id(conversation_key)
         rolling = RollingSummary()
         latest_codex = CodexResult()
         turns: list[TurnRecord] = []
@@ -158,14 +159,19 @@ class WorkerOrchestrator:
                     commands=self._validated_commands(list(self.cfg.codex.default_commands)),
                     previous_response_id=previous_response_id,
                     conversation_key=conversation_key,
+                    thread_id=thread_id,
                 )
                 codex_resp, codex_exchange = self.runtime.codex.execute(
                     codex_payload.model_dump(mode="json"),
                     CodexResult,
                 )
                 previous_response_id = codex_exchange.execution.provider_response_id or previous_response_id
-                if conversation_key and codex_exchange.execution.provider_response_id:
-                    self.sessions.save_previous_response_id(conversation_key, codex_exchange.execution.provider_response_id)
+                thread_id = codex_exchange.execution.provider_thread_id or thread_id
+                if conversation_key:
+                    if codex_exchange.execution.provider_response_id:
+                        self.sessions.save_previous_response_id(conversation_key, codex_exchange.execution.provider_response_id)
+                    if codex_exchange.execution.provider_thread_id:
+                        self.sessions.save_thread_id(conversation_key, codex_exchange.execution.provider_thread_id)
                 store.save_codex(turn, codex_exchange)
                 self._audit(state, "codex", f"turn {turn} completed with status={codex_resp.status.value}")
 

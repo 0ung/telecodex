@@ -11,7 +11,7 @@
 Network flow:
 
 ```text
-Telegram user -> Gateway -> WireGuard private network -> Worker -> Gemini CLI + Codex Responses API
+Telegram user -> Gateway -> WireGuard private network -> Worker -> Gemini CLI + Codex App Server
 ```
 
 ## Current v1 scope
@@ -21,7 +21,7 @@ Telegram user -> Gateway -> WireGuard private network -> Worker -> Gemini CLI + 
 - Private worker API for job creation, status, listing, and cancel requests
 - File-based run artifacts under the worker `runs_dir`
 - Telegram image or file ingestion
-- Codex conversation continuity per channel conversation via persisted `previous_response_id`
+- Codex conversation continuity per channel conversation via persisted Codex `threadId`
 - Docker assets for separate gateway and worker containers
 
 Out of scope in v1:
@@ -74,7 +74,7 @@ Run the gateway:
 
 The default provider is Telegram, but the gateway core now accepts provider adapters so Slack and Discord can be added without changing worker-facing logic.
 
-Codex session continuity is keyed by `channel + conversation_id`, so repeated messages in the same Telegram DM can continue the previous Codex Responses API chain.
+Codex session continuity is keyed by `channel + conversation_id`, so repeated messages in the same Telegram DM can continue the previous Codex App Server thread via `thread/resume`.
 
 ## Testing
 

@@ -100,6 +100,7 @@ class CodexRequest(BaseModel):
     system_prompt: str = ""
     previous_response_id: str = ""
     conversation_key: str = ""
+    thread_id: str = ""
 
 
 class CodexResult(BaseModel):
@@ -138,6 +139,7 @@ class CommandExecution(BaseModel):
     exit_code: int = 0
     duration_ms: int = 0
     provider_response_id: str = ""
+    provider_thread_id: str = ""
     started_at: datetime = Field(default_factory=utc_now)
     finished_at: datetime = Field(default_factory=utc_now)
 

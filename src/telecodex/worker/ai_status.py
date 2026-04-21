@@ -43,6 +43,8 @@ class AiRuntimeStatusService:
             notes.append("Last known token usage is unavailable until a Codex run completes.")
         if self.cfg.codex.protocol == "codex_responses_local_shell":
             notes.append("Codex session chaining uses the Responses API previous_response_id flow.")
+        elif self.cfg.codex.protocol == "codex_app_server":
+            notes.append("Codex session chaining uses the Codex App Server thread/start and thread/resume flow.")
         else:
             notes.append("Codex CLI does not expose remaining ChatGPT/API balance through `login status`.")
         return ProviderRuntimeStatus(
@@ -164,6 +166,8 @@ class AiRuntimeStatusService:
     def _parse_codex_usage(self, stdout: str, observed_at: str | None) -> ProviderUsage | None:
         if self.cfg.codex.protocol == "codex_responses_local_shell":
             return self._parse_codex_responses_usage(stdout, observed_at)
+        if self.cfg.codex.protocol == "codex_app_server":
+            return self._parse_codex_app_server_usage(stdout, observed_at)
         for line in reversed(stdout.splitlines()):
             line = line.strip()
             if not line:
@@ -209,6 +213,32 @@ class AiRuntimeStatusService:
                 output_tokens=output_tokens,
                 total_tokens=total_tokens,
                 cached_input_tokens=cached_input_tokens,
+                requests=1,
+                observed_at=observed_at,
+            )
+        return None
+
+    def _parse_codex_app_server_usage(self, stdout: str, observed_at: str | None) -> ProviderUsage | None:
+        for line in reversed(stdout.splitlines()):
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                payload = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if payload.get("method") != "thread/tokenUsage/updated":
+                continue
+            params = payload.get("params") or {}
+            token_usage = params.get("tokenUsage") or {}
+            usage = token_usage.get("last") or token_usage.get("total") or {}
+            if not usage:
+                continue
+            return ProviderUsage(
+                input_tokens=int(usage.get("inputTokens", 0)),
+                output_tokens=int(usage.get("outputTokens", 0)),
+                total_tokens=int(usage.get("totalTokens", 0)),
+                cached_input_tokens=int(usage.get("cachedInputTokens", 0)),
                 requests=1,
                 observed_at=observed_at,
             )

@@ -37,10 +37,10 @@ gemini:
       instruction_for_codex: "Implement the requested Python worker flow."
       reason: "dry-run continue"
 codex:
-  protocol: "codex_responses_local_shell"
-  api_base_url: "https://api.openai.com/v1"
+  protocol: "codex_app_server"
+  command: "codex"
   args: []
-  model: "codex-mini-latest"
+  model: ""
   timeout_sec: 120
   retries: 0
   default_commands:

@@ -48,33 +48,34 @@ def test_worker_orchestrator_completes_dry_run(tmp_path) -> None:
     assert result.turns[0].codex.summary == "Implementation finished."
 
 
-def test_worker_orchestrator_reuses_previous_codex_response_id_for_same_conversation(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+def test_worker_orchestrator_reuses_codex_thread_for_same_conversation(tmp_path, monkeypatch) -> None:  # noqa: ANN001
     cfg = WorkerConfig(
         workspace_root=str(tmp_path),
         runs_dir=str(tmp_path / ".runs"),
         dry_run=False,
         gemini=AdapterConfig(protocol="gemini_cli", command="gemini", model="gemini-2.5-flash-lite"),
-        codex=AdapterConfig(protocol="codex_responses_local_shell", model="codex-mini-latest"),
+        codex=AdapterConfig(protocol="codex_app_server", command="codex"),
         execution_policy=ExecutionPolicy(allow_commands=["pytest"]),
     )
     orchestrator = WorkerOrchestrator(cfg)
-    seen_previous_response_ids: list[str] = []
+    seen_thread_ids: list[str] = []
 
     def fake_execute(self, payload, response_type):  # noqa: ANN001
         assert self.name == "codex"
-        seen_previous_response_ids.append(payload.get("previous_response_id", ""))
+        seen_thread_ids.append(payload.get("thread_id", ""))
         result = CodexResult(status="completed", summary="done")
         now = utc_now()
         exchange = AdapterExchange(
             request_json="{}",
             response_json=result.model_dump_json(indent=2),
             execution=CommandExecution(
-                command="responses",
+                command="codex app-server",
                 args=[],
                 stdout="{}",
                 stderr="",
                 exit_code=0,
-                provider_response_id=f"resp_{len(seen_previous_response_ids)}",
+                provider_response_id=f"turn_{len(seen_thread_ids)}",
+                provider_thread_id=f"thread_{len(seen_thread_ids)}",
                 started_at=now,
                 finished_at=now,
             ),
@@ -95,4 +96,4 @@ def test_worker_orchestrator_reuses_previous_codex_response_id_for_same_conversa
         detail = JobDetail(summary=summary, request=request)
         orchestrator.run_job(JobRuntimeState(summary=summary, request=request, detail=detail))
 
-    assert seen_previous_response_ids == ["", "resp_1"]
+    assert seen_thread_ids == ["", "thread_1"]

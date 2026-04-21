@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import time
 
 from telecodex.shared.cli import JsonCliAdapter
 from telecodex.shared.config import AdapterConfig
@@ -89,6 +90,98 @@ def test_codex_cli_adapter_builds_noninteractive_exec_args() -> None:
     assert "--model" in args
     assert "-C" in args
     assert args[-1] == "-"
+
+
+def test_codex_app_server_adapter_resumes_existing_thread(monkeypatch, tmp_path) -> None:  # noqa: ANN001
+    class FakePipe:
+        def __init__(self, lines: list[str]) -> None:
+            self._lines = [f"{line}\n" for line in lines]
+            self.closed = False
+
+        def readline(self) -> str:
+            if self._lines:
+                return self._lines.pop(0)
+            time.sleep(0.01)
+            return ""
+
+        def close(self) -> None:
+            self.closed = True
+
+    class FakeStdin:
+        def __init__(self) -> None:
+            self.writes: list[str] = []
+            self.closed = False
+
+        def write(self, value: str) -> None:
+            self.writes.append(value)
+
+        def flush(self) -> None:
+            return None
+
+        def close(self) -> None:
+            self.closed = True
+
+    class FakeProcess:
+        def __init__(self) -> None:
+            self.stdin = FakeStdin()
+            self.stdout = FakePipe(
+                [
+                    json.dumps({"id": 0, "result": {"userAgent": "codex"}}),
+                    json.dumps({"id": 1, "result": {"thread": {"id": "thread_123"}}}),
+                    json.dumps({"id": 2, "result": {"turn": {"id": "turn_456", "status": "inProgress", "items": [], "error": None}}}),
+                    json.dumps({"method": "item/started", "params": {"item": {"type": "agentMessage", "id": "msg_1", "text": "", "phase": "final_answer"}}}),
+                    json.dumps({"method": "item/agentMessage/delta", "params": {"threadId": "thread_123", "turnId": "turn_456", "itemId": "msg_1", "delta": '{"status":"completed","changed_files":[],"commands_run":[],"command_results":[],"summary":"ok","next_step":"","raw_output":"ok"}'}}),
+                    json.dumps({"method": "item/completed", "params": {"item": {"type": "agentMessage", "id": "msg_1", "text": '{"status":"completed","changed_files":[],"commands_run":[],"command_results":[],"summary":"ok","next_step":"","raw_output":"ok"}', "phase": "final_answer"}}}),
+                    json.dumps({"method": "thread/tokenUsage/updated", "params": {"threadId": "thread_123", "turnId": "turn_456", "tokenUsage": {"last": {"totalTokens": 100, "inputTokens": 70, "cachedInputTokens": 20, "outputTokens": 30}}}}),
+                    json.dumps({"method": "turn/completed", "params": {"threadId": "thread_123", "turn": {"id": "turn_456", "items": [], "status": "completed", "error": None}}}),
+                ]
+            )
+            self.stderr = FakePipe([])
+            self._poll = None
+
+        def poll(self):  # noqa: ANN001
+            return self._poll
+
+        def terminate(self) -> None:
+            self._poll = 0
+
+        def wait(self, timeout=None) -> int:  # noqa: ANN001
+            self._poll = 0
+            return 0
+
+        def kill(self) -> None:
+            self._poll = -9
+
+    fake_process = FakeProcess()
+
+    def fake_popen(*args, **kwargs):  # noqa: ANN001
+        return fake_process
+
+    monkeypatch.setattr("telecodex.shared.cli.subprocess.Popen", fake_popen)
+
+    adapter = JsonCliAdapter(
+        "codex",
+        AdapterConfig(protocol="codex_app_server", command="codex", timeout_sec=5),
+        dry_run=False,
+    )
+
+    parsed, exchange = adapter.execute(
+        {
+            "project_path": str(tmp_path),
+            "instruction_for_codex": "Continue the last coding session.",
+            "execution_policy": {"allow_commands": ["pytest"], "deny_commands": []},
+            "commands": ["pytest"],
+            "thread_id": "thread_prev",
+        },
+        CodexResult,
+    )
+
+    sent_messages = "".join(fake_process.stdin.writes)
+    assert '"method": "thread/resume"' in sent_messages
+    assert '"threadId": "thread_prev"' in sent_messages
+    assert parsed.summary == "ok"
+    assert exchange.execution.provider_thread_id == "thread_123"
+    assert exchange.execution.provider_response_id == "turn_456"
 
 
 def test_codex_responses_adapter_chains_previous_response_id(monkeypatch, tmp_path) -> None:  # noqa: ANN001

@@ -6,6 +6,8 @@ import shlex
 import subprocess
 import time
 from pathlib import Path
+from queue import Empty, Queue
+from threading import Thread
 from typing import Any
 
 import httpx
@@ -46,7 +48,7 @@ class JsonCliAdapter:
             started = utc_now()
             started_monotonic = time.perf_counter()
             try:
-                response_json, stdout, stderr, exit_code, executed_args, provider_response_id = self._run_process(payload, request_json)
+                response_json, stdout, stderr, exit_code, executed_args, provider_response_id, provider_thread_id = self._run_process(payload, request_json)
                 parsed = response_type.model_validate(json.loads(response_json))
                 finished = utc_now()
                 execution = CommandExecution(
@@ -57,6 +59,7 @@ class JsonCliAdapter:
                     exit_code=exit_code,
                     duration_ms=int((time.perf_counter() - started_monotonic) * 1000),
                     provider_response_id=provider_response_id,
+                    provider_thread_id=provider_thread_id,
                     started_at=started,
                     finished_at=finished,
                 )
@@ -101,7 +104,9 @@ class JsonCliAdapter:
         )
         return parsed, exchange
 
-    def _run_process(self, payload: dict[str, Any], request_json: str) -> tuple[str, str, str, int, list[str], str]:
+    def _run_process(self, payload: dict[str, Any], request_json: str) -> tuple[str, str, str, int, list[str], str, str]:
+        if self.config.protocol == "codex_app_server":
+            return self._run_codex_app_server(payload, request_json)
         if self.config.protocol == "codex_responses_local_shell":
             return self._run_openai_local_shell(payload, request_json)
         env = {**os.environ, **self.config.env}
@@ -118,10 +123,10 @@ class JsonCliAdapter:
             check=False,
         )
         response_json = self._extract_response_json(completed.stdout)
-        return response_json, completed.stdout, completed.stderr, completed.returncode, args[1:], ""
+        return response_json, completed.stdout, completed.stderr, completed.returncode, args[1:], "", ""
 
     def _resolve_cwd(self, payload: dict[str, Any]) -> str | None:
-        if self.config.protocol == "codex_exec_jsonl":
+        if self.config.protocol in {"codex_exec_jsonl", "codex_app_server"}:
             project_path = str(payload.get("project_path", "")).strip()
             return project_path or None
         return None
@@ -149,6 +154,8 @@ class JsonCliAdapter:
                 args.extend(["-C", project_path])
             args.append("-")
             return args
+        if self.config.protocol == "codex_app_server":
+            return [self.config.command, "app-server", *self.config.args]
         if self.config.protocol == "codex_responses_local_shell":
             return ["responses", self.config.model or "codex-mini-latest", "local_shell"]
         args = [self.config.command, *self.config.args]
@@ -161,6 +168,8 @@ class JsonCliAdapter:
             return _render_gemini_prompt(request_json)
         if self.config.protocol == "codex_exec_jsonl":
             return _render_codex_prompt(request_json)
+        if self.config.protocol == "codex_app_server":
+            return _render_codex_prompt(request_json)
         if self.config.protocol == "codex_responses_local_shell":
             return _render_codex_prompt(request_json)
         if not self.config.prompt_template:
@@ -168,7 +177,216 @@ class JsonCliAdapter:
         template = Path(self.config.prompt_template).read_text(encoding="utf-8")
         return template.replace("{request_json}", request_json)
 
-    def _run_openai_local_shell(self, payload: dict[str, Any], request_json: str) -> tuple[str, str, str, int, list[str], str]:
+    def _run_codex_app_server(self, payload: dict[str, Any], request_json: str) -> tuple[str, str, str, int, list[str], str, str]:
+        env = {**os.environ, **self.config.env}
+        args = self._build_args(payload)
+        process = subprocess.Popen(
+            args,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            cwd=self._resolve_cwd(payload),
+            env=env or None,
+        )
+        if process.stdin is None or process.stdout is None or process.stderr is None:
+            raise CliExecutionError("Codex app-server pipes are unavailable")
+
+        queue: Queue[tuple[str, str | None]] = Queue()
+        stdout_lines: list[str] = []
+        stderr_lines: list[str] = []
+
+        stdout_thread = Thread(target=_pipe_reader, args=(process.stdout, "stdout", queue), daemon=True)
+        stderr_thread = Thread(target=_pipe_reader, args=(process.stderr, "stderr", queue), daemon=True)
+        stdout_thread.start()
+        stderr_thread.start()
+
+        deadline = time.monotonic() + max(self.config.timeout_sec, 1)
+        response_json = ""
+        provider_thread_id = ""
+        provider_response_id = ""
+        final_message = ""
+        turn_status = ""
+        turn_error = ""
+        request_id = 0
+
+        try:
+            self._send_app_server_message(
+                process.stdin,
+                {
+                    "id": request_id,
+                    "method": "initialize",
+                    "params": {
+                        "clientInfo": {
+                            "name": "telecodex-worker",
+                            "title": "Telecodex Worker",
+                            "version": "0.1.0",
+                        }
+                    },
+                },
+            )
+            request_id += 1
+            self._send_app_server_message(process.stdin, {"method": "initialized", "params": {}})
+
+            existing_thread_id = str(payload.get("thread_id", "")).strip()
+            thread_request_id = request_id
+            if existing_thread_id:
+                self._send_app_server_message(
+                    process.stdin,
+                    {
+                        "id": thread_request_id,
+                        "method": "thread/resume",
+                        "params": self._codex_app_server_resume_params(payload, existing_thread_id),
+                    },
+                )
+            else:
+                self._send_app_server_message(
+                    process.stdin,
+                    {
+                        "id": thread_request_id,
+                        "method": "thread/start",
+                        "params": self._codex_app_server_start_params(payload),
+                    },
+                )
+            request_id += 1
+            turn_request_id = request_id
+            turn_requested = False
+
+            while True:
+                source, line = self._next_app_server_message(queue, deadline)
+                if source == "stderr":
+                    if line is not None:
+                        stderr_lines.append(line)
+                    continue
+                if line is None:
+                    if process.poll() is not None:
+                        break
+                    continue
+                stdout_lines.append(line)
+                try:
+                    message = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                response_id = message.get("id")
+                if response_id == thread_request_id:
+                    thread = message.get("result", {}).get("thread", {})
+                    provider_thread_id = str(thread.get("id", "")).strip() or provider_thread_id
+                    if provider_thread_id and not turn_requested:
+                        self._send_app_server_message(
+                            process.stdin,
+                            {
+                                "id": turn_request_id,
+                                "method": "turn/start",
+                                "params": self._codex_app_server_turn_params(payload, provider_thread_id, request_json),
+                            },
+                        )
+                        turn_requested = True
+                    continue
+                if response_id == turn_request_id:
+                    turn = message.get("result", {}).get("turn", {})
+                    provider_response_id = str(turn.get("id", "")).strip() or provider_response_id
+                    continue
+
+                method = str(message.get("method", "")).strip()
+                params = message.get("params", {}) if isinstance(message.get("params"), dict) else {}
+
+                if method == "item/completed":
+                    item = params.get("item", {}) if isinstance(params.get("item"), dict) else {}
+                    if item.get("type") == "agentMessage":
+                        final_message = str(item.get("text", "")).strip() or final_message
+                elif method == "item/agentMessage/delta":
+                    delta = str(params.get("delta", "")).strip()
+                    if delta:
+                        final_message = f"{final_message}{delta}" if final_message else delta
+                elif method == "turn/completed":
+                    turn = params.get("turn", {}) if isinstance(params.get("turn"), dict) else {}
+                    provider_response_id = str(turn.get("id", "")).strip() or provider_response_id
+                    turn_status = str(turn.get("status", "")).strip()
+                    error = turn.get("error")
+                    if isinstance(error, dict):
+                        turn_error = str(error.get("message", "")).strip()
+                    break
+                elif message.get("id") and method:
+                    raise CliExecutionError(f"Codex app-server requested unsupported client action: {method}")
+
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=5)
+
+            if turn_status and turn_status != "completed":
+                detail = turn_error or f"turn finished with status={turn_status}"
+                raise CliExecutionError(f"Codex app-server turn did not complete successfully: {detail}")
+            if not provider_thread_id:
+                raise CliExecutionError("Codex app-server did not return a thread id")
+            if not provider_response_id:
+                raise CliExecutionError("Codex app-server did not return a turn id")
+            response_json = _extract_last_json_blob(final_message)
+            return response_json, "\n".join(stdout_lines), "\n".join(stderr_lines), 0, args[1:], provider_response_id, provider_thread_id
+        finally:
+            self._finalize_app_server_process(process)
+
+    def _codex_app_server_start_params(self, payload: dict[str, Any]) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "approvalPolicy": "never",
+            "sandbox": "danger-full-access",
+            "cwd": self._resolve_cwd(payload),
+        }
+        if self.config.model:
+            params["model"] = self.config.model
+        return {key: value for key, value in params.items() if value not in {None, ""}}
+
+    def _codex_app_server_resume_params(self, payload: dict[str, Any], thread_id: str) -> dict[str, Any]:
+        params = self._codex_app_server_start_params(payload)
+        params["threadId"] = thread_id
+        return params
+
+    def _codex_app_server_turn_params(self, payload: dict[str, Any], thread_id: str, request_json: str) -> dict[str, Any]:
+        params: dict[str, Any] = {
+            "threadId": thread_id,
+            "input": [
+                {
+                    "type": "text",
+                    "text": self._render_input(payload, request_json),
+                }
+            ],
+        }
+        if self.config.model:
+            params["model"] = self.config.model
+        return params
+
+    @staticmethod
+    def _send_app_server_message(stdin: Any, message: dict[str, Any]) -> None:
+        stdin.write(json.dumps(message, ensure_ascii=False) + "\n")
+        stdin.flush()
+
+    @staticmethod
+    def _next_app_server_message(queue: Queue[tuple[str, str | None]], deadline: float) -> tuple[str, str | None]:
+        timeout = max(deadline - time.monotonic(), 0.0)
+        if timeout <= 0:
+            raise CliExecutionError("Codex app-server timed out while waiting for a response")
+        try:
+            return queue.get(timeout=timeout)
+        except Empty as exc:
+            raise CliExecutionError("Codex app-server timed out while waiting for a response") from exc
+
+    @staticmethod
+    def _finalize_app_server_process(process: subprocess.Popen[str]) -> None:
+        if process.stdin is not None and not process.stdin.closed:
+            process.stdin.close()
+        if process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                process.wait(timeout=5)
+
+    def _run_openai_local_shell(self, payload: dict[str, Any], request_json: str) -> tuple[str, str, str, int, list[str], str, str]:
         env = {**os.environ, **self.config.env}
         api_key = self._resolve_openai_api_key(env)
         if not api_key:
@@ -233,7 +451,7 @@ class JsonCliAdapter:
         final_text = self._extract_openai_message_text(latest_response)
         response_json = _extract_last_json_blob(final_text)
         provider_response_id = str(latest_response.get("id", "")).strip()
-        return response_json, "\n".join(response_trace), "", 0, [model, "local_shell"], provider_response_id
+        return response_json, "\n".join(response_trace), "", 0, [model, "local_shell"], provider_response_id, ""
 
     def _extract_local_shell_calls(self, response_payload: dict[str, Any]) -> list[dict[str, Any]]:
         shell_calls: list[dict[str, Any]] = []
@@ -481,3 +699,14 @@ def _render_codex_prompt(request_json: str) -> str:
         "Request JSON:\n"
         f"{request_json}\n"
     )
+
+
+def _pipe_reader(pipe: Any, source: str, queue: Queue[tuple[str, str | None]]) -> None:
+    try:
+        while True:
+            line = pipe.readline()
+            if not line:
+                break
+            queue.put((source, line.rstrip("\r\n")))
+    finally:
+        queue.put((source, None))
