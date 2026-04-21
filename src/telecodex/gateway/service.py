@@ -175,6 +175,8 @@ class GatewayService:
     @staticmethod
     def _turn_progress_line(detail: JobDetail) -> str:
         completed_turns = len(detail.turns)
+        if detail.rolling_summary:
+            completed_turns = max(completed_turns, detail.rolling_summary.completed_turns)
         state = detail.summary.state
         if state == JobState.QUEUED:
             return "Current turn: 1"
