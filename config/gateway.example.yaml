@@ -1,0 +1,7 @@
+telegram_token: "123456:replace-me"
+allowed_user_ids:
+  - 123456789
+worker_base_url: "http://10.20.0.10:8081"
+worker_token: "replace-me"
+poll_timeout_sec: 30
+request_timeout_sec: 30
