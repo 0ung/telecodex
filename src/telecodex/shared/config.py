@@ -44,9 +44,10 @@ class WorkerConfig:
 
 @dataclass
 class GatewayConfig:
-    telegram_token: str
     allowed_user_ids: list[int]
     worker_base_url: str
+    channel_provider: str = "telegram"
+    telegram_token: str = ""
     worker_token: str = ""
     poll_timeout_sec: int = 30
     request_timeout_sec: int = 30
@@ -83,6 +84,7 @@ def load_gateway_config(path: str) -> GatewayConfig:
     token = os.getenv("TELECODEX_TELEGRAM_TOKEN", raw.get("telegram_token", ""))
     worker_token = os.getenv("TELECODEX_WORKER_TOKEN", raw.get("worker_token", ""))
     cfg = GatewayConfig(
+        channel_provider=str(raw.get("channel_provider", "telegram")),
         telegram_token=token,
         allowed_user_ids=[int(item) for item in raw.get("allowed_user_ids", [])],
         worker_base_url=str(raw.get("worker_base_url", "")).rstrip("/"),
@@ -90,7 +92,7 @@ def load_gateway_config(path: str) -> GatewayConfig:
         poll_timeout_sec=int(raw.get("poll_timeout_sec", 30)),
         request_timeout_sec=int(raw.get("request_timeout_sec", 30)),
     )
-    if not cfg.telegram_token:
+    if cfg.channel_provider == "telegram" and not cfg.telegram_token:
         raise ValueError("gateway config: telegram_token is required")
     if not cfg.allowed_user_ids:
         raise ValueError("gateway config: allowed_user_ids is required")

@@ -1,10 +1,10 @@
 # Telecodex Python Replatform
 
-`telecodex` is now a Python-first project with a Telegram-only entrypoint and a private worker runtime.
+`telecodex` is now a Python-first project with a pluggable conversational gateway and a private worker runtime.
 
 ## Architecture
 
-- `gateway`: Telegram long-polling service that accepts commands from approved users
+- `gateway`: channel-agnostic conversational gateway core with provider adapters
 - `worker`: private FastAPI service that runs the Gemini/Codex orchestration loop
 - `shared`: contracts, config models, CLI wrappers, report generation, and run artifact helpers
 
@@ -16,15 +16,16 @@ Telegram user -> Gateway -> WireGuard private network -> Worker -> Gemini/Codex 
 
 ## Current v1 scope
 
-- Text-only Telegram commands
+- Text-first conversational commands through pluggable chat adapters
 - Approved-user allowlist
 - Private worker API for job creation, status, listing, and cancel requests
 - File-based run artifacts under the worker `runs_dir`
+- Telegram image or file ingestion
 - Docker assets for separate gateway and worker containers
 
 Out of scope in v1:
 
-- Telegram image or file ingestion
+- Slack and Discord runtime adapters
 - Public worker ingress
 - Database-backed run storage
 
@@ -62,13 +63,15 @@ Run the gateway:
 .\.venv\Scripts\python -m telecodex.gateway.main --config config/gateway.example.yaml
 ```
 
-## Telegram commands
+## Conversational commands
 
 - `/run <goal>`: start a new job
 - `/status`: show the latest job state
 - `/runs`: list recent jobs
 - `/show <job_id>`: show one job in detail
 - `/stop <job_id>`: request cancellation
+
+The default provider is Telegram, but the gateway core now accepts provider adapters so Slack and Discord can be added without changing worker-facing logic.
 
 ## Testing
 
@@ -78,7 +81,7 @@ Run the gateway:
 
 ## Deployment
 
-- `docker/gateway.Dockerfile`: Telegram gateway image
+- `docker/gateway.Dockerfile`: conversational gateway image
 - `docker/worker.Dockerfile`: private worker image
 - `deploy/compose.private.yaml`: two-service deployment example
 - `docs/python-replatform.md`: architecture and deployment notes

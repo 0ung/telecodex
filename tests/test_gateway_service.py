@@ -1,25 +1,20 @@
 from __future__ import annotations
 
+from telecodex.gateway.interfaces import IncomingMessage
 from telecodex.gateway.service import GatewayService
 from telecodex.shared.config import GatewayConfig
-from telecodex.shared.models import JobCreateResponse, JobDetail, JobListResponse, JobRequest, JobState, JobSummary
+from telecodex.shared.models import JobAttachment, JobCreateResponse, JobDetail, JobListResponse, JobRequest, JobState, JobSummary
 
 
-class FakeTelegram:
+class FakeChat:
     def __init__(self) -> None:
-        self.messages: list[tuple[int, str]] = []
+        self.messages: list[tuple[str, str]] = []
 
-    def get_updates(self, offset, timeout_sec):  # noqa: ANN001, D401
+    def poll_messages(self, timeout_sec):  # noqa: ANN001, D401
         return []
 
-    def send_message(self, chat_id: int, text: str) -> None:
-        self.messages.append((chat_id, text))
-
-    def get_file(self, file_id: str):  # noqa: ANN001
-        return {"file_id": file_id, "file_path": "photos/test.jpg"}
-
-    def download_file(self, file_path: str) -> bytes:  # noqa: ANN001
-        return b"image-bytes"
+    def send_message(self, conversation_id: str, text: str) -> None:
+        self.messages.append((conversation_id, text))
 
 
 class FakeWorker:
@@ -38,55 +33,75 @@ class FakeWorker:
 
 
 def test_gateway_service_rejects_non_text() -> None:
-    telegram = FakeTelegram()
+    chat = FakeChat()
     service = GatewayService(
         cfg=GatewayConfig(
             telegram_token="token",
             allowed_user_ids=[1],
             worker_base_url="http://worker",
         ),
-        telegram=telegram,
+        chat=chat,
         worker=FakeWorker(),
     )
-    service._handle_message({"chat": {"id": 10, "type": "private"}, "from": {"id": 1}})
-    assert telegram.messages[-1][1] == "Send text, a photo, or both."
+    service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1))
+    assert chat.messages[-1][1] == "Send text, a photo, or both."
 
 
 def test_gateway_service_starts_job_from_plain_text() -> None:
-    telegram = FakeTelegram()
+    chat = FakeChat()
     service = GatewayService(
         cfg=GatewayConfig(
             telegram_token="token",
             allowed_user_ids=[1],
             worker_base_url="http://worker",
         ),
-        telegram=telegram,
+        chat=chat,
         worker=FakeWorker(),
     )
-    service._handle_message({"chat": {"id": 10, "type": "private"}, "from": {"id": 1}, "text": "build this"})
-    assert "job-1" in telegram.messages[-1][1]
+    service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text="build this"))
+    assert "job-1" in chat.messages[-1][1]
 
 
 def test_gateway_service_starts_job_from_photo_caption() -> None:
-    telegram = FakeTelegram()
+    chat = FakeChat()
     service = GatewayService(
         cfg=GatewayConfig(
             telegram_token="token",
             allowed_user_ids=[1],
             worker_base_url="http://worker",
         ),
-        telegram=telegram,
+        chat=chat,
         worker=FakeWorker(),
     )
     service._handle_message(
-        {
-            "chat": {"id": 10, "type": "private"},
-            "from": {"id": 1},
-            "caption": "analyze this image",
-            "photo": [
-                {"file_id": "small", "file_unique_id": "u1"},
-                {"file_id": "large", "file_unique_id": "u2"},
+        IncomingMessage(
+            channel="telegram",
+            conversation_id="10",
+            sender_id=1,
+            text="analyze this image",
+            attachments=[
+                JobAttachment(
+                    kind="photo",
+                    file_name="image.jpg",
+                    mime_type="image/jpeg",
+                    content_base64="aW1hZ2UtYnl0ZXM=",
+                )
             ],
-        }
+        )
     )
-    assert "attachment" in telegram.messages[-1][1]
+    assert "attachment" in chat.messages[-1][1]
+
+
+def test_gateway_service_ignores_non_direct_messages() -> None:
+    chat = FakeChat()
+    service = GatewayService(
+        cfg=GatewayConfig(
+            telegram_token="token",
+            allowed_user_ids=[1],
+            worker_base_url="http://worker",
+        ),
+        chat=chat,
+        worker=FakeWorker(),
+    )
+    service._handle_message(IncomingMessage(channel="slack", conversation_id="C1", sender_id=1, text="build this", is_direct_message=False))
+    assert chat.messages == []
