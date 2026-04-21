@@ -261,6 +261,41 @@ class HealthResponse(BaseModel):
     active_job_id: str | None = None
 
 
+class ProviderQuota(BaseModel):
+    requests_per_minute: int | None = None
+    requests_per_day: int | None = None
+    tokens_per_minute: int | None = None
+    source: str = ""
+
+
+class ProviderUsage(BaseModel):
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    cached_input_tokens: int = 0
+    requests: int = 0
+    errors: int = 0
+    observed_at: datetime | None = None
+
+
+class ProviderRuntimeStatus(BaseModel):
+    provider: str
+    configured_model: str = ""
+    auth_ok: bool = False
+    auth_mode: str = ""
+    auth_message: str = ""
+    dry_run: bool = False
+    quota: ProviderQuota | None = None
+    last_usage: ProviderUsage | None = None
+    notes: list[str] = Field(default_factory=list)
+
+
+class AIStatusResponse(BaseModel):
+    codex: ProviderRuntimeStatus
+    gemini: ProviderRuntimeStatus
+    checked_at: datetime = Field(default_factory=utc_now)
+
+
 def truncate_text(value: str, limit: int) -> str:
     if limit <= 0:
         return ""

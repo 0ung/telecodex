@@ -4,7 +4,7 @@ from typing import Any
 
 import httpx
 
-from telecodex.shared.models import CancelResponse, JobCreateResponse, JobDetail, JobListResponse, JobRequest
+from telecodex.shared.models import AIStatusResponse, CancelResponse, JobCreateResponse, JobDetail, JobListResponse, JobRequest
 
 
 class WorkerClient:
@@ -37,6 +37,11 @@ class WorkerClient:
         response = httpx.post(f"{self.base_url}/jobs/{job_id}/cancel", headers=self._headers(), timeout=self.timeout_sec)
         response.raise_for_status()
         return CancelResponse.model_validate(response.json())
+
+    def ai_status(self) -> AIStatusResponse:
+        response = httpx.get(f"{self.base_url}/ai/status", headers=self._headers(), timeout=self.timeout_sec)
+        response.raise_for_status()
+        return AIStatusResponse.model_validate(response.json())
 
     def _headers(self) -> dict[str, str]:
         headers = {}

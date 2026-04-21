@@ -3,13 +3,15 @@ from __future__ import annotations
 from fastapi import Depends, FastAPI, Header, HTTPException, status
 
 from telecodex.shared.config import WorkerConfig
-from telecodex.shared.models import CancelResponse, HealthResponse, JobCreateResponse, JobDetail, JobListResponse, JobRequest
+from telecodex.shared.models import AIStatusResponse, CancelResponse, HealthResponse, JobCreateResponse, JobDetail, JobListResponse, JobRequest
+from telecodex.worker.ai_status import AiRuntimeStatusService
 from telecodex.worker.orchestrator import JobManager
 
 
 def create_worker_app(cfg: WorkerConfig) -> FastAPI:
     app = FastAPI(title="telecodex-worker", version="0.1.0")
     manager = JobManager(cfg)
+    ai_status = AiRuntimeStatusService(cfg)
 
     def authorize(x_worker_token: str | None = Header(default=None)) -> None:
         if cfg.worker_token and x_worker_token != cfg.worker_token:
@@ -18,6 +20,10 @@ def create_worker_app(cfg: WorkerConfig) -> FastAPI:
     @app.get("/health", response_model=HealthResponse)
     def health(_: None = Depends(authorize)) -> HealthResponse:
         return HealthResponse(**manager.health())
+
+    @app.get("/ai/status", response_model=AIStatusResponse)
+    def get_ai_status(_: None = Depends(authorize)) -> AIStatusResponse:
+        return ai_status.build()
 
     @app.post("/jobs", response_model=JobCreateResponse, status_code=status.HTTP_201_CREATED)
     def create_job(request: JobRequest, _: None = Depends(authorize)) -> JobCreateResponse:

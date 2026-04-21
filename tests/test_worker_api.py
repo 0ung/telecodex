@@ -45,3 +45,22 @@ def test_worker_api_creates_and_reads_job(tmp_path) -> None:
     loaded = client.get(f"/jobs/{job_id}", headers={"X-Worker-Token": "secret"})
     assert loaded.status_code == 200
     assert loaded.json()["summary"]["job_id"] == job_id
+
+
+def test_worker_api_reports_ai_status(tmp_path) -> None:
+    cfg = WorkerConfig(
+        workspace_root=str(tmp_path),
+        runs_dir=str(tmp_path / ".runs"),
+        dry_run=True,
+        worker_token="secret",
+        gemini=AdapterConfig(protocol="gemini_cli", mock_responses=[]),
+        codex=AdapterConfig(protocol="codex_exec_jsonl", mock_responses=[]),
+        execution_policy=ExecutionPolicy(),
+    )
+    client = TestClient(create_worker_app(cfg))
+
+    response = client.get("/ai/status", headers={"X-Worker-Token": "secret"})
+
+    assert response.status_code == 200
+    assert response.json()["codex"]["provider"] == "codex"
+    assert response.json()["gemini"]["provider"] == "gemini"

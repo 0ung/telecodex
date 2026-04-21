@@ -101,6 +101,8 @@ class JsonCliAdapter:
         env = {**os.environ, **self.config.env}
         args = [self.config.command, *self.config.args]
         stdin_payload = self._render_stdin(request_json)
+        if self.config.model:
+            args.extend(["--model", self.config.model])
         completed = subprocess.run(
             args,
             input=stdin_payload,

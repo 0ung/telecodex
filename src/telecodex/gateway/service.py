@@ -35,6 +35,9 @@ class GatewayService:
         if text == "/status":
             self._status_command(message.conversation_id)
             return
+        if text == "/ai status":
+            self._ai_status_command(message.conversation_id)
+            return
         if text == "/runs":
             self._runs_command(message.conversation_id)
             return
@@ -95,6 +98,13 @@ class GatewayService:
         except Exception as exc:  # noqa: BLE001
             self.chat.send_message(conversation_id, f"Failed to list runs: {exc}")
 
+    def _ai_status_command(self, conversation_id: str) -> None:
+        try:
+            status = self.worker.ai_status()
+            self.chat.send_message(conversation_id, self._format_ai_status(status))
+        except Exception as exc:  # noqa: BLE001
+            self.chat.send_message(conversation_id, f"Failed to fetch AI runtime status: {exc}")
+
     def _show_command(self, conversation_id: str, job_id: str) -> None:
         if not job_id:
             self.chat.send_message(conversation_id, "Usage: /show <job_id>")
@@ -142,8 +152,52 @@ class GatewayService:
                 "/run <goal> - start a new worker job",
                 "Send a photo or file with optional text - create an attachment-backed job",
                 "/status - show the latest run status",
+                "/ai status - show Codex and Gemini runtime status",
                 "/runs - list recent jobs",
                 "/show <job_id> - show one run in detail",
                 "/stop <job_id> - cancel a running job",
             ]
         )
+
+    @staticmethod
+    def _format_ai_status(status) -> str:  # noqa: ANN001
+        codex = status.codex
+        gemini = status.gemini
+        lines = [
+            "AI Runtime Status",
+            "",
+            f"Codex: {'ready' if codex.auth_ok else 'not ready'}",
+            f"Model: {codex.configured_model or 'default'}",
+            f"Auth: {codex.auth_message}",
+        ]
+        if codex.last_usage:
+            lines.append(
+                "Last usage: "
+                f"in={codex.last_usage.input_tokens}, out={codex.last_usage.output_tokens}, total={codex.last_usage.total_tokens}"
+            )
+        else:
+            lines.append("Last usage: unavailable")
+        lines.extend(
+            [
+                "",
+                f"Gemini: {'ready' if gemini.auth_ok else 'not ready'}",
+                f"Model: {gemini.configured_model or 'default'}",
+                f"Auth: {gemini.auth_message}",
+            ]
+        )
+        if gemini.quota:
+            lines.append(
+                "Quota: "
+                f"{gemini.quota.requests_per_minute or '?'} RPM, "
+                f"{gemini.quota.tokens_per_minute or '?'} TPM, "
+                f"{gemini.quota.requests_per_day or '?'} RPD"
+            )
+        if gemini.last_usage:
+            lines.append(
+                "Last usage: "
+                f"in={gemini.last_usage.input_tokens}, out={gemini.last_usage.output_tokens}, total={gemini.last_usage.total_tokens}, "
+                f"req={gemini.last_usage.requests}, err={gemini.last_usage.errors}"
+            )
+        else:
+            lines.append("Last usage: unavailable")
+        return "\n".join(lines)
