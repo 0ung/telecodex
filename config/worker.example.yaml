@@ -1,0 +1,46 @@
+host: "0.0.0.0"
+port: 8081
+workspace_root: "."
+runs_dir: "./.runs-python"
+max_turns: 6
+max_turns_cap: 6
+dynamic_turn_budget: false
+max_codex_failures: 2
+dry_run: true
+print_io: false
+worker_token: "replace-me"
+execution_policy:
+  allow_commands:
+    - git
+    - python
+    - pytest
+  deny_commands:
+    - rm
+    - del
+gemini:
+  protocol: "gemini_cli"
+  command: "gemini"
+  args: []
+  timeout_sec: 120
+  retries: 1
+  mock_responses:
+    - status: "continue"
+      summary_for_user: "Planner approved the initial implementation."
+      instruction_for_codex: "Implement the requested Python worker flow."
+      reason: "dry-run continue"
+codex:
+  protocol: "codex_exec_jsonl"
+  command: "codex"
+  args: []
+  timeout_sec: 900
+  retries: 0
+  default_commands:
+    - "pytest"
+  mock_responses:
+    - status: "completed"
+      changed_files:
+        - "src/telecodex/worker/orchestrator.py"
+      commands_run:
+        - "pytest"
+      summary: "Dry-run worker implementation completed."
+      raw_output: "ok"
