@@ -11,9 +11,16 @@ print_io: false
 worker_token: "replace-me"
 execution_policy:
   allow_commands:
+    - bash
+    - cat
+    - find
     - git
+    - ls
+    - pwd
     - python
     - pytest
+    - rg
+    - sed
   deny_commands:
     - rm
     - del
@@ -30,10 +37,11 @@ gemini:
       instruction_for_codex: "Implement the requested Python worker flow."
       reason: "dry-run continue"
 codex:
-  protocol: "codex_exec_jsonl"
+  protocol: "codex_app_server"
   command: "codex"
   args: []
-  timeout_sec: 900
+  model: ""
+  timeout_sec: 120
   retries: 0
   default_commands:
     - "pytest"

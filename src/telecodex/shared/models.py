@@ -98,6 +98,9 @@ class CodexRequest(BaseModel):
     execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
     commands: list[str] = Field(default_factory=list)
     system_prompt: str = ""
+    previous_response_id: str = ""
+    conversation_key: str = ""
+    thread_id: str = ""
 
 
 class CodexResult(BaseModel):
@@ -135,6 +138,8 @@ class CommandExecution(BaseModel):
     stderr: str = ""
     exit_code: int = 0
     duration_ms: int = 0
+    provider_response_id: str = ""
+    provider_thread_id: str = ""
     started_at: datetime = Field(default_factory=utc_now)
     finished_at: datetime = Field(default_factory=utc_now)
 
@@ -199,6 +204,8 @@ class JobRequest(BaseModel):
     goal: str
     requester_id: int
     workspace_path: str
+    channel: str = ""
+    conversation_id: str = ""
     text_only: bool = True
     requires_private_network: bool = True
     attachments: list["JobAttachment"] = Field(default_factory=list)
@@ -235,6 +242,7 @@ class JobDetail(BaseModel):
     summary: JobSummary
     request: JobRequest
     result: FinalResult | None = None
+    turns: list[TurnRecord] = Field(default_factory=list)
     rolling_summary: RollingSummary | None = None
     audit_log: list[AuditEvent] = Field(default_factory=list)
     report_path: str = ""

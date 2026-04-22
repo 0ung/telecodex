@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from telecodex.gateway.interfaces import ChatAdapter, IncomingMessage
 from telecodex.gateway.worker_client import WorkerClient
 from telecodex.shared.config import GatewayConfig
-from telecodex.shared.models import JobAttachment, JobDetail, JobRequest
+from telecodex.shared.models import JobAttachment, JobDetail, JobRequest, JobState, TurnRecord
 
 
 @dataclass
@@ -30,7 +30,7 @@ class GatewayService:
             return
 
         if text.startswith("/run "):
-            self._run_command(message.conversation_id, message.sender_id, text[5:].strip())
+            self._run_command(message.channel, message.conversation_id, message.sender_id, text[5:].strip())
             return
         if text == "/status":
             self._status_command(message.conversation_id)
@@ -50,9 +50,16 @@ class GatewayService:
         if text in {"/help", "/start"}:
             self.chat.send_message(message.conversation_id, self._help_text())
             return
-        self._run_command(message.conversation_id, message.sender_id, text, attachments=attachments)
+        self._run_command(message.channel, message.conversation_id, message.sender_id, text, attachments=attachments)
 
-    def _run_command(self, conversation_id: str, user_id: int, goal: str, attachments: list[JobAttachment] | None = None) -> None:
+    def _run_command(
+        self,
+        channel: str,
+        conversation_id: str,
+        user_id: int,
+        goal: str,
+        attachments: list[JobAttachment] | None = None,
+    ) -> None:
         attachments = attachments or []
         if not goal and not attachments:
             self.chat.send_message(conversation_id, "Usage: /run <goal> or send a photo with a caption.")
@@ -63,6 +70,8 @@ class GatewayService:
                     goal=goal or "Analyze the attached image input.",
                     requester_id=user_id,
                     workspace_path=".",
+                    channel=channel,
+                    conversation_id=conversation_id,
                     text_only=not attachments,
                     requires_private_network=True,
                     attachments=attachments,
@@ -79,11 +88,8 @@ class GatewayService:
             if not jobs:
                 self.chat.send_message(conversation_id, "No runs yet.")
                 return
-            current = jobs[0]
-            self.chat.send_message(
-                conversation_id,
-                f"Latest job `{current.job_id}` is `{current.state.value}`.\nSummary: {current.final_summary or current.goal}",
-            )
+            detail = self.worker.get_job(jobs[0].job_id)
+            self.chat.send_message(conversation_id, self._format_status_detail(detail))
         except Exception as exc:  # noqa: BLE001
             self.chat.send_message(conversation_id, f"Failed to fetch status: {exc}")
 
@@ -132,6 +138,9 @@ class GatewayService:
             f"State: `{detail.summary.state.value}`",
             f"Goal: {detail.summary.goal}",
         ]
+        turn_line = GatewayService._turn_progress_line(detail)
+        if turn_line:
+            lines.append(turn_line)
         if detail.request.attachments:
             lines.append(f"Attachments: {len(detail.request.attachments)}")
         if detail.summary.final_status:
@@ -140,10 +149,72 @@ class GatewayService:
             lines.append(f"Summary: {detail.summary.final_summary}")
         if detail.report_path:
             lines.append(f"Report: {detail.report_path}")
-        if detail.rolling_summary and detail.rolling_summary.current_summary:
+        dialogue_lines = GatewayService._recent_dialogue_lines(detail, max_turns=5)
+        if dialogue_lines:
+            lines.append("")
+            lines.append("Dialogue")
+            lines.extend(dialogue_lines)
+        elif detail.rolling_summary and detail.rolling_summary.current_summary:
             lines.append("")
             lines.append(detail.rolling_summary.current_summary)
         return "\n".join(lines)
+
+    @staticmethod
+    def _format_status_detail(detail: JobDetail) -> str:
+        lines = [
+            f"Latest job `{detail.summary.job_id}`",
+            f"State: `{detail.summary.state.value}`",
+            f"Goal: {detail.summary.goal}",
+        ]
+        turn_line = GatewayService._turn_progress_line(detail)
+        if turn_line:
+            lines.append(turn_line)
+
+        dialogue_lines = GatewayService._recent_dialogue_lines(detail, max_turns=2)
+        if dialogue_lines:
+            lines.append("")
+            lines.append("Recent dialogue")
+            lines.extend(dialogue_lines)
+        elif detail.summary.final_summary:
+            lines.append("")
+            lines.append(f"Summary: {detail.summary.final_summary}")
+
+        return "\n".join(lines)
+
+    @staticmethod
+    def _turn_progress_line(detail: JobDetail) -> str:
+        completed_turns = len(detail.turns)
+        if detail.rolling_summary:
+            completed_turns = max(completed_turns, detail.rolling_summary.completed_turns)
+        state = detail.summary.state
+        if state == JobState.QUEUED:
+            return "Current turn: 1"
+        if state in {JobState.RUNNING, JobState.WAITING_REVIEW}:
+            return f"Current turn: {completed_turns + 1}"
+        if completed_turns:
+            return f"Completed turns: {completed_turns}"
+        return ""
+
+    @staticmethod
+    def _recent_dialogue_lines(detail: JobDetail, max_turns: int) -> list[str]:
+        recent_turns = detail.turns[-max_turns:]
+        if recent_turns:
+            lines: list[str] = []
+            for turn in recent_turns:
+                lines.extend(GatewayService._format_turn_dialogue(turn))
+            return lines
+        if detail.rolling_summary and detail.rolling_summary.current_summary.strip():
+            return detail.rolling_summary.current_summary.strip().splitlines()
+        return []
+
+    @staticmethod
+    def _format_turn_dialogue(turn: TurnRecord) -> list[str]:
+        lines = [f"Turn {turn.turn_number}"]
+        gemini_line = turn.gemini.summary_for_user.strip() or turn.gemini.reason.strip() or turn.gemini.status.value
+        codex_line = turn.codex.summary.strip() or turn.codex.next_step.strip() or turn.codex.status.value
+        lines.append(f"Gemini: {gemini_line}")
+        lines.append(f"Codex: {codex_line}")
+        return lines
 
     @staticmethod
     def _help_text() -> str:

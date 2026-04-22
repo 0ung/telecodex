@@ -14,6 +14,7 @@ from telecodex.shared.models import ExecutionPolicy, MockAdapterResponse
 class AdapterConfig:
     protocol: str
     command: str = ""
+    api_base_url: str = "https://api.openai.com/v1"
     args: list[str] = field(default_factory=list)
     env: dict[str, str] = field(default_factory=dict)
     timeout_sec: int = 120
@@ -37,7 +38,7 @@ class WorkerConfig:
     dry_run: bool = True
     print_io: bool = False
     gemini: AdapterConfig = field(default_factory=lambda: AdapterConfig(protocol="gemini_cli"))
-    codex: AdapterConfig = field(default_factory=lambda: AdapterConfig(protocol="codex_exec_jsonl", timeout_sec=900))
+    codex: AdapterConfig = field(default_factory=lambda: AdapterConfig(protocol="codex_app_server", command="codex", timeout_sec=900))
     execution_policy: ExecutionPolicy = field(default_factory=ExecutionPolicy)
     worker_token: str = ""
 
@@ -106,6 +107,7 @@ def _load_adapter(raw: dict[str, Any]) -> AdapterConfig:
     return AdapterConfig(
         protocol=str(raw.get("protocol", "generic_json")),
         command=str(raw.get("command", "")),
+        api_base_url=str(raw.get("api_base_url", "https://api.openai.com/v1")).rstrip("/"),
         args=[str(item) for item in raw.get("args", [])],
         env={str(key): str(value) for key, value in raw.get("env", {}).items()},
         timeout_sec=int(raw.get("timeout_sec", 120)),

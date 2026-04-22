@@ -33,6 +33,7 @@ from telecodex.shared.models import (
     utc_now,
 )
 from telecodex.worker.store import FileRunStore
+from telecodex.worker.sessions import ConversationSessionStore
 
 
 @dataclass
@@ -53,6 +54,7 @@ class JobRuntimeState:
 class WorkerOrchestrator:
     def __init__(self, cfg: WorkerConfig) -> None:
         self.cfg = cfg
+        self.sessions = ConversationSessionStore(cfg.runs_dir)
         self.runtime = OrchestrationRuntime(
             cfg=cfg,
             gemini=JsonCliAdapter("gemini", cfg.gemini, cfg.dry_run),
@@ -84,9 +86,14 @@ class WorkerOrchestrator:
         store.save_metadata(metadata)
         store.save_job_request(state.request)
 
+        conversation_key = self._conversation_key(state.request)
+        previous_response_id = self.sessions.get_previous_response_id(conversation_key)
+        thread_id = self.sessions.get_thread_id(conversation_key)
         rolling = RollingSummary()
         latest_codex = CodexResult()
         turns: list[TurnRecord] = []
+        state.detail.rolling_summary = rolling
+        state.detail.turns = []
         failures = 0
         final_status: FinalStatus | None = None
         final_reason = ""
@@ -150,11 +157,21 @@ class WorkerOrchestrator:
                     instruction_for_codex=instruction,
                     execution_policy=self.cfg.execution_policy,
                     commands=self._validated_commands(list(self.cfg.codex.default_commands)),
+                    previous_response_id=previous_response_id,
+                    conversation_key=conversation_key,
+                    thread_id=thread_id,
                 )
                 codex_resp, codex_exchange = self.runtime.codex.execute(
                     codex_payload.model_dump(mode="json"),
                     CodexResult,
                 )
+                previous_response_id = codex_exchange.execution.provider_response_id or previous_response_id
+                thread_id = codex_exchange.execution.provider_thread_id or thread_id
+                if conversation_key:
+                    if codex_exchange.execution.provider_response_id:
+                        self.sessions.save_previous_response_id(conversation_key, codex_exchange.execution.provider_response_id)
+                    if codex_exchange.execution.provider_thread_id:
+                        self.sessions.save_thread_id(conversation_key, codex_exchange.execution.provider_thread_id)
                 store.save_codex(turn, codex_exchange)
                 self._audit(state, "codex", f"turn {turn} completed with status={codex_resp.status.value}")
 
@@ -172,6 +189,9 @@ class WorkerOrchestrator:
                 latest_codex = codex_resp
                 rolling = update_rolling_summary(rolling, turn_record)
                 rolling.codex_failures = failures
+                state.detail.summary = state.summary
+                state.detail.turns = list(turns)
+                state.detail.rolling_summary = rolling
                 store.save_summary(rolling)
 
                 if failures > self.cfg.max_codex_failures:
@@ -220,6 +240,7 @@ class WorkerOrchestrator:
                 summary=state.summary,
                 request=state.request,
                 result=result,
+                turns=turns,
                 rolling_summary=rolling,
                 audit_log=state.detail.audit_log,
                 report_path=report_path,
@@ -255,6 +276,7 @@ class WorkerOrchestrator:
                 summary=state.summary,
                 request=state.request,
                 result=result,
+                turns=turns,
                 rolling_summary=rolling,
                 audit_log=state.detail.audit_log,
                 report_path=report_path,
@@ -300,6 +322,14 @@ class WorkerOrchestrator:
             if allow and prefix not in allow:
                 raise RuntimeError(f"command '{prefix}' is not allowed by execution policy")
         return commands
+
+    @staticmethod
+    def _conversation_key(request: JobRequest) -> str:
+        channel = request.channel.strip()
+        conversation_id = request.conversation_id.strip()
+        if not channel or not conversation_id:
+            return ""
+        return f"{channel}:{conversation_id}"
 
 
 class JobManager:
