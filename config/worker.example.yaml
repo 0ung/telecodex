@@ -21,17 +21,29 @@ gemini:
   protocol: "gemini_cli"
   command: "gemini"
   args: []
+  model: "gemini-2.5-flash-lite"
   timeout_sec: 120
   retries: 1
   mock_responses:
     - status: "continue"
+      verdict: "continue"
       summary_for_user: "Planner approved the initial implementation."
       instruction_for_codex: "Implement the requested Python worker flow."
+      acceptance_criteria:
+        - "Implement the requested Python worker flow."
+        - "Run the configured verification command or explain why it could not run."
       reason: "dry-run continue"
+    - status: "done"
+      verdict: "done"
+      summary_for_user: "The session goal is complete."
+      completed_acceptance_criteria:
+        - "Implement the requested Python worker flow."
+        - "Run the configured verification command or explain why it could not run."
 codex:
-  protocol: "codex_exec_jsonl"
+  protocol: "codex_app_server"
   command: "codex"
   args: []
+  model: ""
   timeout_sec: 900
   retries: 0
   default_commands:
@@ -43,4 +55,8 @@ codex:
       commands_run:
         - "pytest"
       summary: "Dry-run worker implementation completed."
+      verified_acceptance_criteria:
+        - "Implement the requested Python worker flow."
+        - "Run the configured verification command or explain why it could not run."
+      proposed_completion: true
       raw_output: "ok"

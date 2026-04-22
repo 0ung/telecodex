@@ -11,16 +11,17 @@
 Network flow:
 
 ```text
-Telegram user -> Gateway -> WireGuard private network -> Worker -> Gemini/Codex CLI
+Telegram user -> Gateway -> WireGuard private network -> Worker -> Gemini CLI + Codex App Server
 ```
 
 ## Current v1 scope
 
 - Text-first conversational commands through pluggable chat adapters
 - Approved-user allowlist
-- Private worker API for job creation, status, listing, and cancel requests
+- Private worker API for session creation, continuation, status, listing, and cancel requests
 - File-based run artifacts under the worker `runs_dir`
 - Telegram image or file ingestion
+- Codex conversation continuity per channel conversation via persisted Codex `threadId`
 - Docker assets for separate gateway and worker containers
 
 Out of scope in v1:
@@ -65,13 +66,20 @@ Run the gateway:
 
 ## Conversational commands
 
-- `/run <goal>`: start a new job
-- `/status`: show the latest job state
-- `/runs`: list recent jobs
-- `/show <job_id>`: show one job in detail
-- `/stop <job_id>`: request cancellation
+- `/run <goal>`: start a new shared-goal session
+- Send a normal message while a session is active: append user notes or answer Gemini follow-up questions
+- `/status`: show the latest session state, verdict, criteria progress, and recent dialogue
+- `/ai status`: show Codex and Gemini runtime/auth status
+- `/runs`: list recent sessions in the current conversation
+- `/show <session_id>`: show one session in detail
+- `/stop <session_id>`: request cancellation
+- Active sessions also push compact summary updates back to the chat when the shared session document changes
+
+Legacy `/jobs` API routes still exist as compatibility wrappers around the latest internal run for each session.
 
 The default provider is Telegram, but the gateway core now accepts provider adapters so Slack and Discord can be added without changing worker-facing logic.
+
+Codex session continuity is keyed by `channel + conversation_id`, so repeated messages in the same Telegram DM can continue the previous Codex App Server thread via `thread/resume`.
 
 ## Testing
 
