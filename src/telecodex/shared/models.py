@@ -12,9 +12,43 @@ def utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+class SessionState(str, Enum):
+    PLANNING = "planning"
+    EXECUTING = "executing"
+    REVIEWING = "reviewing"
+    WAITING_USER = "waiting_user"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELED = "canceled"
+
+    @property
+    def is_active(self) -> bool:
+        return self in {
+            SessionState.PLANNING,
+            SessionState.EXECUTING,
+            SessionState.REVIEWING,
+        }
+
+    @property
+    def is_terminal(self) -> bool:
+        return self in {
+            SessionState.COMPLETED,
+            SessionState.FAILED,
+            SessionState.CANCELED,
+        }
+
+
+class SessionVerdict(str, Enum):
+    CONTINUE = "continue"
+    DONE = "done"
+    ASK_USER = "ask_user"
+    FAIL = "fail"
+
+
 class GeminiStatus(str, Enum):
     CONTINUE = "continue"
     DONE = "done"
+    ASK_USER = "ask_user"
     FAILED = "failed"
 
 
@@ -37,6 +71,7 @@ class CodexStatus(str, Enum):
 
 class FinalStatus(str, Enum):
     DONE = "done"
+    WAITING_USER = "waiting_user"
     GEMINI_FAILED = "gemini_failed"
     MAX_TURNS_EXCEEDED = "max_turns_exceeded"
     CODEX_FAILURES_EXCEEDED = "codex_failures_exceeded"
@@ -48,6 +83,7 @@ class JobState(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
     WAITING_REVIEW = "waiting_review"
+    WAITING_USER = "waiting_user"
     FAILED = "failed"
     COMPLETED = "completed"
     CANCELED = "canceled"
@@ -66,9 +102,18 @@ class ExecutionPolicy(BaseModel):
     deny_commands: list[str] = Field(default_factory=list)
 
 
+class SessionMcpConfig(BaseModel):
+    base_url: str
+    token: str
+
+
 class GeminiRequest(BaseModel):
+    session_id: str = ""
     user_goal: str = ""
     current_summary: str = ""
+    acceptance_criteria: list[str] = Field(default_factory=list)
+    user_notes: list[str] = Field(default_factory=list)
+    shared_goal_path: str = ""
     latest_codex_result: "CodexResult" = Field(default_factory=lambda: CodexResult())
     remaining_turns: int
     configured_max_turns: int | None = None
@@ -78,7 +123,9 @@ class GeminiRequest(BaseModel):
     def compact(self) -> "GeminiRequest":
         compact = self.model_copy(deep=True)
         compact.user_goal = truncate_text(compact.user_goal, 400)
-        compact.current_summary = truncate_text(compact.current_summary, 600)
+        compact.current_summary = truncate_text(compact.current_summary, 800)
+        compact.acceptance_criteria = [truncate_text(item, 200) for item in compact.acceptance_criteria[:8]]
+        compact.user_notes = [truncate_text(item, 200) for item in compact.user_notes[-8:]]
         compact.latest_codex_result = compact.latest_codex_result.compact_for_gemini()
         return compact
 
@@ -88,6 +135,12 @@ class GeminiResponse(BaseModel):
     summary_for_user: str = ""
     instruction_for_codex: str = ""
     acceptance_criteria: list[str] = Field(default_factory=list)
+    completed_acceptance_criteria: list[str] = Field(default_factory=list)
+    verdict: SessionVerdict | None = None
+    gemini_plan: str = ""
+    review_notes: str = ""
+    next_action: str = ""
+    question_for_user: str = ""
     reason: str = ""
     suggested_max_turns: int | None = None
 
@@ -98,6 +151,11 @@ class CodexRequest(BaseModel):
     execution_policy: ExecutionPolicy = Field(default_factory=ExecutionPolicy)
     commands: list[str] = Field(default_factory=list)
     system_prompt: str = ""
+    session_id: str = ""
+    shared_goal_path: str = ""
+    acceptance_criteria: list[str] = Field(default_factory=list)
+    latest_gemini_next_action: str = ""
+    mcp_server: SessionMcpConfig | None = None
 
 
 class CodexResult(BaseModel):
@@ -108,6 +166,10 @@ class CodexResult(BaseModel):
     summary: str = ""
     next_step: str = ""
     raw_output: str = ""
+    codex_plan: str = ""
+    verification_notes: str = ""
+    verified_acceptance_criteria: list[str] = Field(default_factory=list)
+    proposed_completion: bool = False
 
     def compact_for_gemini(self) -> "CodexResult":
         items = [
@@ -125,6 +187,10 @@ class CodexResult(BaseModel):
             command_results=items,
             summary=truncate_text(self.summary, 800),
             next_step=truncate_text(self.next_step, 400),
+            codex_plan=truncate_text(self.codex_plan, 500),
+            verification_notes=truncate_text(self.verification_notes, 500),
+            verified_acceptance_criteria=[truncate_text(item, 200) for item in self.verified_acceptance_criteria[:8]],
+            proposed_completion=self.proposed_completion,
         )
 
 
@@ -163,6 +229,7 @@ class FinalResult(BaseModel):
     started_at: datetime = Field(default_factory=utc_now)
     finished_at: datetime = Field(default_factory=utc_now)
     codex_failures: int = 0
+    completed_acceptance_criteria: list[str] = Field(default_factory=list)
 
 
 class RollingSummary(BaseModel):
@@ -181,6 +248,7 @@ class RunMetadata(BaseModel):
     max_turns: int
     effective_max_turns: int
     max_codex_failures: int
+    session_id: str = ""
     started_at: datetime = Field(default_factory=utc_now)
     finished_at: datetime | None = None
     status: FinalStatus | None = None
@@ -193,15 +261,6 @@ class AuditEvent(BaseModel):
     stage: str
     message: str
     timestamp: datetime = Field(default_factory=utc_now)
-
-
-class JobRequest(BaseModel):
-    goal: str
-    requester_id: int
-    workspace_path: str
-    text_only: bool = True
-    requires_private_network: bool = True
-    attachments: list["JobAttachment"] = Field(default_factory=list)
 
 
 class JobAttachment(BaseModel):
@@ -219,10 +278,35 @@ class JobAttachment(BaseModel):
         return cleaned or "attachment.bin"
 
 
+class SessionRequest(BaseModel):
+    goal: str
+    requester_id: int
+    workspace_path: str
+    channel: str = "telegram"
+    conversation_id: str = ""
+    constraints: list[str] = Field(default_factory=list)
+    acceptance_criteria: list[str] = Field(default_factory=list)
+    user_notes: list[str] = Field(default_factory=list)
+    text_only: bool = True
+    requires_private_network: bool = True
+    attachments: list["JobAttachment"] = Field(default_factory=list)
+
+
+class JobRequest(SessionRequest):
+    session_id: str = ""
+
+
+class SessionContinueRequest(BaseModel):
+    text: str = ""
+    attachments: list["JobAttachment"] = Field(default_factory=list)
+
+
 class JobSummary(BaseModel):
     job_id: str
     state: JobState
     goal: str
+    session_id: str = ""
+    conversation_id: str = ""
     created_at: datetime = Field(default_factory=utc_now)
     started_at: datetime | None = None
     finished_at: datetime | None = None
@@ -240,6 +324,43 @@ class JobDetail(BaseModel):
     report_path: str = ""
     error: str = ""
 
+    @property
+    def turns(self) -> list[TurnRecord]:
+        return self.result.turns if self.result else []
+
+
+class SessionSummary(BaseModel):
+    session_id: str
+    channel: str
+    conversation_id: str
+    goal: str
+    state: SessionState
+    verdict: SessionVerdict | None = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    active_run_id: str = ""
+    final_summary: str = ""
+    shared_goal_path: str = ""
+
+
+class SessionDetail(BaseModel):
+    summary: SessionSummary
+    request: SessionRequest
+    latest_job: JobDetail | None = None
+    turns: list[TurnRecord] = Field(default_factory=list)
+    acceptance_criteria: list[str] = Field(default_factory=list)
+    completed_acceptance_criteria: list[str] = Field(default_factory=list)
+    user_notes: list[str] = Field(default_factory=list)
+    gemini_plan: str = ""
+    codex_plan: str = ""
+    codex_execution: str = ""
+    codex_verification: str = ""
+    gemini_review: str = ""
+    next_action: str = ""
+    final_outcome: str = ""
+    shared_goal_markdown: str = ""
+    error: str = ""
+
 
 class JobListResponse(BaseModel):
     jobs: list[JobSummary] = Field(default_factory=list)
@@ -250,15 +371,34 @@ class JobCreateResponse(BaseModel):
     state: JobState
 
 
+class SessionListResponse(BaseModel):
+    sessions: list[SessionSummary] = Field(default_factory=list)
+
+
+class SessionCreateResponse(BaseModel):
+    session_id: str
+    state: SessionState
+    verdict: SessionVerdict | None = None
+
+
+class SessionContinueResponse(BaseModel):
+    session_id: str
+    state: SessionState
+    verdict: SessionVerdict | None = None
+
+
 class CancelResponse(BaseModel):
-    job_id: str
-    state: JobState
+    job_id: str = ""
+    state: JobState = JobState.CANCELED
     accepted: bool
+    session_id: str = ""
+    session_state: SessionState | None = None
 
 
 class HealthResponse(BaseModel):
     status: str
     active_job_id: str | None = None
+    active_session_id: str | None = None
 
 
 def truncate_text(value: str, limit: int) -> str:
@@ -269,6 +409,22 @@ def truncate_text(value: str, limit: int) -> str:
     if limit <= 3:
         return value[:limit]
     return value[: limit - 3] + "..."
+
+
+def merge_unique_items(*groups: list[str]) -> list[str]:
+    seen: set[str] = set()
+    merged: list[str] = []
+    for group in groups:
+        for item in group:
+            cleaned = item.strip()
+            if not cleaned:
+                continue
+            key = cleaned.casefold()
+            if key in seen:
+                continue
+            seen.add(key)
+            merged.append(cleaned)
+    return merged
 
 
 def update_rolling_summary(existing: RollingSummary, turn: TurnRecord) -> RollingSummary:
@@ -307,13 +463,24 @@ def generate_final_report(result: FinalResult, rollup: RollingSummary | None) ->
         "",
         result.final_summary or "No final summary was produced.",
         "",
-        "## Rolling Summary",
-        "",
-        f"```text\n{rollup.current_summary if rollup else 'No rolling summary available.'}\n```",
-        "",
-        "## Turns",
+        "## Acceptance Criteria Completed",
         "",
     ]
+    if result.completed_acceptance_criteria:
+        lines.extend(f"- {item}" for item in result.completed_acceptance_criteria)
+    else:
+        lines.append("No acceptance criteria were marked as complete.")
+    lines.extend(
+        [
+            "",
+            "## Rolling Summary",
+            "",
+            f"```text\n{rollup.current_summary if rollup else 'No rolling summary available.'}\n```",
+            "",
+            "## Turns",
+            "",
+        ]
+    )
     for turn in result.turns:
         lines.extend(
             [
@@ -321,6 +488,7 @@ def generate_final_report(result: FinalResult, rollup: RollingSummary | None) ->
                 "",
                 f"- Gemini Status: `{turn.gemini.status.value}`",
                 f"- Gemini Summary: {turn.gemini.summary_for_user or 'n/a'}",
+                f"- Gemini Verdict: `{resolve_session_verdict(turn.gemini).value}`",
                 f"- Codex Status: `{turn.codex.status.value}`",
                 f"- Codex Summary: {turn.codex.summary or 'n/a'}",
             ]
@@ -364,11 +532,44 @@ def codex_terminal_reason(status: CodexStatus, summary: str) -> str:
     return summary
 
 
+def resolve_session_verdict(response: GeminiResponse) -> SessionVerdict:
+    if response.verdict is not None:
+        return response.verdict
+    if response.status == GeminiStatus.DONE:
+        return SessionVerdict.DONE
+    if response.status == GeminiStatus.ASK_USER:
+        return SessionVerdict.ASK_USER
+    if response.status == GeminiStatus.FAILED:
+        return SessionVerdict.FAIL
+    return SessionVerdict.CONTINUE
+
+
+def derive_acceptance_criteria(goal: str) -> list[str]:
+    goal = goal.strip()
+    if not goal:
+        return [
+            "Clarify the user goal before implementation.",
+            "Capture the missing constraints in the shared session document.",
+            "Do not mark the session done without explicit scope confirmation.",
+        ]
+    return [
+        f"Deliver the requested outcome: {goal}",
+        "Verify the implementation with the best available command or explain why verification could not run.",
+        "Summarize the changes, remaining risks, and whether the goal is fully satisfied.",
+    ]
+
+
 class MockAdapterResponse(BaseModel):
     status: str
     summary_for_user: str = ""
     instruction_for_codex: str = ""
     acceptance_criteria: list[str] = Field(default_factory=list)
+    completed_acceptance_criteria: list[str] = Field(default_factory=list)
+    verdict: str = ""
+    gemini_plan: str = ""
+    review_notes: str = ""
+    next_action: str = ""
+    question_for_user: str = ""
     reason: str = ""
     suggested_max_turns: int | None = None
     changed_files: list[str] = Field(default_factory=list)
@@ -377,12 +578,20 @@ class MockAdapterResponse(BaseModel):
     summary: str = ""
     raw_output: str = ""
     next_step: str = ""
+    codex_plan: str = ""
+    verification_notes: str = ""
+    verified_acceptance_criteria: list[str] = Field(default_factory=list)
+    proposed_completion: bool = False
 
     def to_payload(self) -> dict[str, Any]:
-        return self.model_dump(mode="json")
+        payload = self.model_dump(mode="json")
+        if not payload.get("verdict"):
+            payload.pop("verdict", None)
+        return payload
 
 
 GeminiRequest.model_rebuild()
+SessionRequest.model_rebuild()
 JobRequest.model_rebuild()
 
 

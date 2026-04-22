@@ -9,7 +9,83 @@ from telecodex.shared.models import ExecutionPolicy, MockAdapterResponse
 from telecodex.worker.service import create_worker_app
 
 
-def test_worker_api_creates_and_reads_job(tmp_path) -> None:
+def _build_cfg(tmp_path) -> WorkerConfig:  # noqa: ANN001
+    return WorkerConfig(
+        workspace_root=str(tmp_path),
+        runs_dir=str(tmp_path / ".runs"),
+        dry_run=True,
+        worker_token="secret",
+        gemini=AdapterConfig(
+            protocol="gemini_cli",
+            model="gemini-2.5-flash",
+            mock_responses=[
+                MockAdapterResponse(
+                    status="continue",
+                    verdict="continue",
+                    summary_for_user="continue",
+                    instruction_for_codex="do work",
+                    acceptance_criteria=["Do work", "Verify the change"],
+                ),
+                MockAdapterResponse(
+                    status="done",
+                    verdict="done",
+                    summary_for_user="done",
+                    completed_acceptance_criteria=["Do work", "Verify the change"],
+                ),
+            ],
+        ),
+        codex=AdapterConfig(
+            protocol="codex_exec_jsonl",
+            mock_responses=[
+                MockAdapterResponse(
+                    status="completed",
+                    summary="done",
+                    verified_acceptance_criteria=["Do work", "Verify the change"],
+                    proposed_completion=True,
+                )
+            ],
+        ),
+        execution_policy=ExecutionPolicy(),
+    )
+
+
+def test_worker_api_creates_and_reads_session(tmp_path) -> None:
+    client = TestClient(create_worker_app(_build_cfg(tmp_path)))
+
+    created = client.post(
+        "/sessions",
+        headers={"X-Worker-Token": "secret"},
+        json={
+            "goal": "Run",
+            "requester_id": 1,
+            "workspace_path": str(tmp_path),
+            "channel": "telegram",
+            "conversation_id": "chat-1",
+            "text_only": True,
+            "requires_private_network": True,
+        },
+    )
+    assert created.status_code == 201
+    session_id = created.json()["session_id"]
+
+    time.sleep(0.2)
+    loaded = client.get(f"/sessions/{session_id}", headers={"X-Worker-Token": "secret"})
+    assert loaded.status_code == 200
+    assert loaded.json()["summary"]["session_id"] == session_id
+    assert loaded.json()["acceptance_criteria"]
+
+    jobs_payload = []
+    for _ in range(10):
+        jobs = client.get("/jobs", headers={"X-Worker-Token": "secret"})
+        assert jobs.status_code == 200
+        jobs_payload = jobs.json()["jobs"]
+        if jobs_payload:
+            break
+        time.sleep(0.1)
+    assert jobs_payload
+
+
+def test_worker_api_continues_waiting_session(tmp_path) -> None:
     cfg = WorkerConfig(
         workspace_root=str(tmp_path),
         runs_dir=str(tmp_path / ".runs"),
@@ -17,31 +93,44 @@ def test_worker_api_creates_and_reads_job(tmp_path) -> None:
         worker_token="secret",
         gemini=AdapterConfig(
             protocol="gemini_cli",
+            model="gemini-2.5-flash",
             mock_responses=[
                 MockAdapterResponse(
-                    status="continue",
-                    summary_for_user="continue",
-                    instruction_for_codex="do work",
-                )
+                    status="ask_user",
+                    verdict="ask_user",
+                    summary_for_user="Need clarification",
+                    question_for_user="Which branch?",
+                ),
+                MockAdapterResponse(
+                    status="done",
+                    verdict="done",
+                    summary_for_user="All done",
+                ),
             ],
         ),
-        codex=AdapterConfig(
-            protocol="codex_exec_jsonl",
-            mock_responses=[MockAdapterResponse(status="completed", summary="done")],
-        ),
+        codex=AdapterConfig(protocol="codex_exec_jsonl"),
         execution_policy=ExecutionPolicy(),
     )
     client = TestClient(create_worker_app(cfg))
-
     created = client.post(
-        "/jobs",
+        "/sessions",
         headers={"X-Worker-Token": "secret"},
-        json={"goal": "Run", "requester_id": 1, "workspace_path": str(tmp_path), "text_only": True, "requires_private_network": True},
+        json={
+            "goal": "Run",
+            "requester_id": 1,
+            "workspace_path": str(tmp_path),
+            "channel": "telegram",
+            "conversation_id": "chat-2",
+            "text_only": True,
+            "requires_private_network": True,
+        },
     )
-    assert created.status_code == 201
-    job_id = created.json()["job_id"]
-
+    session_id = created.json()["session_id"]
     time.sleep(0.2)
-    loaded = client.get(f"/jobs/{job_id}", headers={"X-Worker-Token": "secret"})
-    assert loaded.status_code == 200
-    assert loaded.json()["summary"]["job_id"] == job_id
+    continued = client.post(
+        f"/sessions/{session_id}/continue",
+        headers={"X-Worker-Token": "secret"},
+        json={"text": "Use main"},
+    )
+    assert continued.status_code == 200
+    assert continued.json()["session_id"] == session_id

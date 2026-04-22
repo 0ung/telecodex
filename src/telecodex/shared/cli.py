@@ -19,7 +19,7 @@ from telecodex.shared.models import (
 
 
 class CliExecutionError(RuntimeError):
-    """Raised when a CLI execution cannot produce a valid response."""
+    """Raised when an adapter execution cannot produce a valid response."""
 
 
 class JsonCliAdapter:
@@ -34,20 +34,17 @@ class JsonCliAdapter:
         if self.dry_run:
             return self._execute_mock(request_json, response_type)
 
-        if not self.config.command:
-            raise CliExecutionError(f"{self.name} adapter requires command when dry_run is false")
-
         attempts = self.config.retries + 1
         last_error: Exception | None = None
         for _ in range(attempts):
             started = utc_now()
             started_monotonic = time.perf_counter()
             try:
-                response_json, stdout, stderr, exit_code = self._run_process(request_json)
+                response_json, stdout, stderr, exit_code = self._execute_real(request_json)
                 parsed = response_type.model_validate(json.loads(response_json))
                 finished = utc_now()
                 execution = CommandExecution(
-                    command=self.config.command,
+                    command=self.config.command or self.config.protocol,
                     args=list(self.config.args),
                     stdout=stdout,
                     stderr=stderr,
@@ -65,6 +62,11 @@ class JsonCliAdapter:
                 last_error = exc
         assert last_error is not None
         raise CliExecutionError(str(last_error)) from last_error
+
+    def _execute_real(self, request_json: str) -> tuple[str, str, str, int]:
+        if not self.config.command:
+            raise CliExecutionError(f"{self.name} adapter requires command when dry_run is false")
+        return self._run_process(request_json)
 
     def _execute_mock(self, request_json: str, response_type: type[GeminiResponse] | type[CodexResult]) -> tuple[Any, AdapterExchange]:
         if not self.config.mock_responses:
@@ -100,7 +102,7 @@ class JsonCliAdapter:
     def _run_process(self, request_json: str) -> tuple[str, str, str, int]:
         env = {**os.environ, **self.config.env}
         args = [self.config.command, *self.config.args]
-        stdin_payload = self._render_stdin(request_json)
+        stdin_payload = self._render_prompt(request_json)
         completed = subprocess.run(
             args,
             input=stdin_payload,
@@ -113,11 +115,23 @@ class JsonCliAdapter:
         response_json = self._extract_response_json(completed.stdout)
         return response_json, completed.stdout, completed.stderr, completed.returncode
 
-    def _render_stdin(self, request_json: str) -> str:
-        if not self.config.prompt_template:
-            return request_json
-        template = Path(self.config.prompt_template).read_text(encoding="utf-8")
-        return template.replace("{request_json}", request_json)
+    def _render_prompt(self, request_json: str) -> str:
+        if self.config.prompt_template:
+            template = Path(self.config.prompt_template).read_text(encoding="utf-8")
+            return template.replace("{request_json}", request_json)
+        return (
+            "Return a single JSON object that satisfies the requested schema. "
+            "Do not wrap the answer in markdown.\n\n"
+            f"{request_json}"
+        )
+
+    def _configured_model(self, default: str) -> str:
+        if self.config.model.strip():
+            return self.config.model.strip()
+        for index, item in enumerate(self.config.args):
+            if item == "--model" and index + 1 < len(self.config.args):
+                return self.config.args[index + 1]
+        return default
 
     def _extract_response_json(self, stdout: str) -> str:
         text = stdout.strip()
