@@ -37,7 +37,7 @@ class WorkerConfig:
     max_codex_failures: int = 2
     dry_run: bool = True
     print_io: bool = False
-    gemini: AdapterConfig = field(default_factory=lambda: AdapterConfig(protocol="gemini_cli"))
+    gemini: AdapterConfig = field(default_factory=lambda: AdapterConfig(protocol="gemini_cli", model="gemini-2.5-flash-lite"))
     codex: AdapterConfig = field(default_factory=lambda: AdapterConfig(protocol="codex_app_server", command="codex", timeout_sec=900))
     execution_policy: ExecutionPolicy = field(default_factory=ExecutionPolicy)
     worker_token: str = ""
@@ -52,6 +52,7 @@ class GatewayConfig:
     worker_token: str = ""
     poll_timeout_sec: int = 30
     request_timeout_sec: int = 30
+    session_push_interval_sec: int = 5
 
 
 def load_worker_config(path: str) -> WorkerConfig:
@@ -92,6 +93,7 @@ def load_gateway_config(path: str) -> GatewayConfig:
         worker_token=worker_token,
         poll_timeout_sec=int(raw.get("poll_timeout_sec", 30)),
         request_timeout_sec=int(raw.get("request_timeout_sec", 30)),
+        session_push_interval_sec=int(raw.get("session_push_interval_sec", 5)),
     )
     if cfg.channel_provider == "telegram" and not cfg.telegram_token:
         raise ValueError("gateway config: telegram_token is required")

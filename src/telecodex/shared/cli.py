@@ -24,7 +24,7 @@ from telecodex.shared.models import (
 
 
 class CliExecutionError(RuntimeError):
-    """Raised when a CLI execution cannot produce a valid response."""
+    """Raised when an adapter execution cannot produce a valid response."""
 
 
 class JsonCliAdapter:
@@ -48,7 +48,10 @@ class JsonCliAdapter:
             started = utc_now()
             started_monotonic = time.perf_counter()
             try:
-                response_json, stdout, stderr, exit_code, executed_args, provider_response_id, provider_thread_id = self._run_process(payload, request_json)
+                response_json, stdout, stderr, exit_code, executed_args, provider_response_id, provider_thread_id = self._run_process(
+                    payload,
+                    request_json,
+                )
                 parsed = response_type.model_validate(json.loads(response_json))
                 finished = utc_now()
                 execution = CommandExecution(
@@ -109,6 +112,7 @@ class JsonCliAdapter:
             return self._run_codex_app_server(payload, request_json)
         if self.config.protocol == "codex_responses_local_shell":
             return self._run_openai_local_shell(payload, request_json)
+
         env = {**os.environ, **self.config.env}
         args = self._build_args(payload)
         stdin_payload = self._render_input(payload, request_json)
@@ -166,11 +170,7 @@ class JsonCliAdapter:
     def _render_input(self, payload: dict[str, Any], request_json: str) -> str:
         if self.config.protocol == "gemini_cli":
             return _render_gemini_prompt(request_json)
-        if self.config.protocol == "codex_exec_jsonl":
-            return _render_codex_prompt(request_json)
-        if self.config.protocol == "codex_app_server":
-            return _render_codex_prompt(request_json)
-        if self.config.protocol == "codex_responses_local_shell":
+        if self.config.protocol in {"codex_exec_jsonl", "codex_app_server", "codex_responses_local_shell"}:
             return _render_codex_prompt(request_json)
         if not self.config.prompt_template:
             return request_json
@@ -202,7 +202,6 @@ class JsonCliAdapter:
         stderr_thread.start()
 
         deadline = time.monotonic() + max(self.config.timeout_sec, 1)
-        response_json = ""
         provider_thread_id = ""
         provider_response_id = ""
         final_message = ""
@@ -220,7 +219,7 @@ class JsonCliAdapter:
                         "clientInfo": {
                             "name": "telecodex-worker",
                             "title": "Telecodex Worker",
-                            "version": "0.1.0",
+                            "version": "0.2.0",
                         }
                     },
                 },
@@ -348,12 +347,7 @@ class JsonCliAdapter:
     def _codex_app_server_turn_params(self, payload: dict[str, Any], thread_id: str, request_json: str) -> dict[str, Any]:
         params: dict[str, Any] = {
             "threadId": thread_id,
-            "input": [
-                {
-                    "type": "text",
-                    "text": self._render_input(payload, request_json),
-                }
-            ],
+            "input": [{"type": "text", "text": self._render_input(payload, request_json)}],
         }
         if self.config.model:
             params["model"] = self.config.model
@@ -617,7 +611,7 @@ class JsonCliAdapter:
                 if isinstance(payload, dict) and "result" in payload and isinstance(payload["result"], dict):
                     return json.dumps(payload["result"], ensure_ascii=False)
                 item = payload.get("item") if isinstance(payload, dict) else None
-                if isinstance(item, dict) and item.get("type") == "agent_message" and isinstance(item.get("text"), str):
+                if isinstance(item, dict) and item.get("type") in {"agent_message", "agentMessage"} and isinstance(item.get("text"), str):
                     last_message = item["text"]
                     break
             if last_message:
@@ -651,21 +645,28 @@ def _strip_code_fences(text: str) -> str:
 
 def _render_gemini_prompt(request_json: str) -> str:
     return (
-        "You are the planner/reviewer for the telecodex worker.\n"
+        "You are the planner and reviewer for the telecodex worker.\n"
         "Read the request JSON below and respond with exactly one JSON object.\n"
         "Do not wrap the JSON in markdown fences.\n"
         "The JSON schema is:\n"
         "{\n"
-        '  "status": "continue" | "done" | "failed",\n'
+        '  "status": "continue" | "done" | "ask_user" | "failed",\n'
         '  "summary_for_user": "short plain-language summary",\n'
         '  "instruction_for_codex": "next concrete instruction for codex",\n'
-        '  "acceptance_criteria": ["optional list"],\n'
+        '  "acceptance_criteria": ["criteria to keep or add"],\n'
+        '  "completed_acceptance_criteria": ["criteria now complete"],\n'
+        '  "verdict": "continue" | "done" | "ask_user" | "fail" | null,\n'
+        '  "gemini_plan": "planner notes for the shared session doc",\n'
+        '  "review_notes": "review notes after codex work",\n'
+        '  "next_action": "next immediate focus for codex or the user",\n'
+        '  "question_for_user": "only when more user input is required",\n'
         '  "reason": "brief reason",\n'
         '  "suggested_max_turns": null\n'
         "}\n"
         "Rules:\n"
         "- Use status=continue when Codex should take another action.\n"
-        "- Use status=done when the task is complete.\n"
+        "- Use status=done when the session goal is complete.\n"
+        "- Use status=ask_user only when Codex cannot safely continue without a human answer.\n"
         "- Use status=failed when the run should stop due to an unrecoverable problem.\n"
         "- Keep instruction_for_codex empty unless status=continue.\n"
         "- Keep the response compact and valid JSON.\n\n"
@@ -676,9 +677,9 @@ def _render_gemini_prompt(request_json: str) -> str:
 
 def _render_codex_prompt(request_json: str) -> str:
     return (
-        "You are the executor for the telecodex worker.\n"
+        "You are the executor for the telecodex worker session.\n"
         "Carry out the requested work inside the provided project path.\n"
-        "You may edit files and run commands when needed.\n"
+        "Use the shared session goal, acceptance criteria, and MCP server context when present.\n"
         "When you finish, respond with exactly one JSON object and no markdown fences.\n"
         "The JSON schema is:\n"
         "{\n"
@@ -688,13 +689,19 @@ def _render_codex_prompt(request_json: str) -> str:
         '  "command_results": [{"command":"cmd","exit_code":0,"stdout":"","stderr":"","duration_ms":0}],\n'
         '  "summary": "what happened",\n'
         '  "next_step": "optional next step",\n'
-        '  "raw_output": "optional short raw summary"\n'
+        '  "raw_output": "optional short raw summary",\n'
+        '  "codex_plan": "brief plan for the shared session document",\n'
+        '  "verification_notes": "verification details or why verification could not run",\n'
+        '  "verified_acceptance_criteria": ["criteria you believe are satisfied"],\n'
+        '  "proposed_completion": true\n'
         "}\n"
         "Rules:\n"
         "- Report only valid JSON.\n"
-        "- Prefer status=completed when the requested work is finished.\n"
+        "- Prefer status=completed when the requested work is finished for this turn.\n"
         "- Use waiting_for_input when you are blocked on a human decision.\n"
         "- changed_files and commands_run must reflect what actually happened.\n"
+        "- Only mark verified_acceptance_criteria when your changes or verification genuinely support them.\n"
+        "- proposed_completion should be true only when the current implementation looks ready for Gemini review.\n"
         "- Keep raw_output concise.\n\n"
         "Request JSON:\n"
         f"{request_json}\n"
