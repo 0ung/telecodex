@@ -4,10 +4,12 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+*.egg-info/
 .codex/
 .runs-python/
 archive/*.zip
 app.log
+dist/
 telecodex.lock
 telegram-codex.lock
 .codex-schema/
