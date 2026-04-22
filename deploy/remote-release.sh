@@ -14,6 +14,20 @@ CURRENT_PATH="${CURRENT_PATH:-$APP_ROOT/current}"
 KEEP_RELEASES="${KEEP_RELEASES:-5}"
 SERVICE_NAME="${SERVICE_NAME:-telecodex-$ROLE}"
 
+wait_for_worker_health() {
+  local token="$1"
+  local attempts="${2:-15}"
+
+  for _ in $(seq 1 "$attempts"); do
+    if curl -fsS -H "X-Worker-Token: $token" http://127.0.0.1:8081/health >/dev/null; then
+      return 0
+    fi
+    sleep 2
+  done
+
+  return 1
+}
+
 if [[ "$ROLE" != "gateway" && "$ROLE" != "worker" ]]; then
   echo "unsupported role: $ROLE" >&2
   exit 1
@@ -50,7 +64,7 @@ sudo systemctl is-active --quiet "$SERVICE_NAME"
 
 if [[ "$ROLE" == "worker" ]]; then
   TOKEN="$(sudo awk -F= '/^TELECODEX_WORKER_TOKEN=/{print $2}' /etc/telecodex/worker.env | tr -d '\r')"
-  curl -fsS -H "X-Worker-Token: $TOKEN" http://127.0.0.1:8081/health >/dev/null
+  wait_for_worker_health "$TOKEN"
 fi
 
 sudo bash -lc "cd '$RELEASES_DIR' && ls -1dt */ 2>/dev/null | tail -n +$((KEEP_RELEASES + 1)) | xargs -r rm -rf --"
