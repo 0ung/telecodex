@@ -87,11 +87,18 @@ Codex session continuity is keyed by `channel + conversation_id`, so repeated me
 .\.venv\Scripts\python -m pytest tests
 ```
 
+## CI/CD
+
+- `.github/workflows/python-ci.yml`: Python `3.10` and `3.12` test workflow
+- `.github/workflows/deploy.yml`: `main` push or manual deploy to the worker and gateway servers
+- [docs/github-actions-deploy.md](docs/github-actions-deploy.md): required repository secrets, variables, and remote deploy behavior
+
 ## Deployment
 
 - `docker/gateway.Dockerfile`: conversational gateway image
 - `docker/worker.Dockerfile`: private worker image
 - `deploy/compose.private.yaml`: two-service deployment example
+- `deploy/remote-release.sh`: systemd-oriented SSH deployment script for the OCI gateway/worker nodes
 - `docs/python-replatform.md`: architecture and deployment notes
 
 ## Legacy Go archive
