@@ -53,18 +53,13 @@ jobs:
         run: |
           release_id="${GITHUB_SHA::12}"
           echo "release_id=$release_id" >> "$GITHUB_OUTPUT"
-          tar \
-            --exclude=.git \
-            --exclude=.github \
-            --exclude=.venv \
-            --exclude=.pytest_cache \
-            --exclude=__pycache__ \
-            -czf "telecodex-${release_id}.tar.gz" .
+          mkdir -p dist
+          git archive --format=tar.gz --output "dist/telecodex-${release_id}.tar.gz" HEAD
 
       - uses: actions/upload-artifact@v4
         with:
           name: telecodex-release
-          path: telecodex-${{ steps.meta.outputs.release_id }}.tar.gz
+          path: dist/telecodex-${{ steps.meta.outputs.release_id }}.tar.gz
           if-no-files-found: error
 
   deploy-worker:
@@ -116,6 +111,7 @@ jobs:
       - deploy-worker
     if: |
       always() &&
+      needs.package.result == 'success' &&
       (github.event_name == 'push' || github.event.inputs.target == 'all' || github.event.inputs.target == 'gateway') &&
       (needs.deploy-worker.result == 'success' || needs.deploy-worker.result == 'skipped')
     env:
