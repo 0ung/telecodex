@@ -161,13 +161,31 @@ class WorkerOrchestrator:
                 )
                 store.save_gemini(local_turn, gemini_exchange)
 
-                resolved_criteria = merge_unique_items(
-                    state.detail.acceptance_criteria,
-                    state.request.acceptance_criteria,
-                    gemini_resp.acceptance_criteria,
-                )
+                revised_goal = gemini_resp.revised_goal.strip()
+                goal_changed = bool(revised_goal and revised_goal != state.request.goal.strip())
+                if goal_changed:
+                    state.request.goal = revised_goal
+                    self.store.save_request(session_id, state.request)
+                    store.save_job_request(
+                        JobRequest(
+                            **state.request.model_dump(mode="json"),
+                            session_id=session_id,
+                        )
+                    )
+                    completed_criteria = []
+                    resolved_criteria = merge_unique_items(
+                        gemini_resp.acceptance_criteria,
+                        derive_acceptance_criteria(revised_goal),
+                    )
+                else:
+                    resolved_criteria = merge_unique_items(
+                        state.detail.acceptance_criteria,
+                        state.request.acceptance_criteria,
+                        gemini_resp.acceptance_criteria,
+                    )
                 if not resolved_criteria:
                     resolved_criteria = derive_acceptance_criteria(state.request.goal)
+                state.request.acceptance_criteria = list(resolved_criteria)
                 completed_criteria = merge_unique_items(
                     completed_criteria,
                     gemini_resp.completed_acceptance_criteria,
@@ -178,6 +196,7 @@ class WorkerOrchestrator:
                 next_action = gemini_resp.next_action.strip() or gemini_resp.question_for_user.strip() or gemini_resp.instruction_for_codex.strip()
                 self.mcp_service.session_write_gemini_sections(
                     session_id=session_id,
+                    goal=revised_goal,
                     gemini_plan=gemini_plan,
                     gemini_review=gemini_review,
                     next_action=next_action,
@@ -185,6 +204,7 @@ class WorkerOrchestrator:
                     completed_acceptance_criteria=completed_criteria,
                     verdict=verdict.value,
                     status=gemini_state.value,
+                    replace_goal_context=goal_changed,
                 )
                 self._refresh_session_detail(state)
                 self._audit(state, "gemini", f"turn {global_turn} completed with verdict={verdict.value}")
@@ -491,6 +511,11 @@ class WorkerOrchestrator:
             "for unavoidable product names such as Gemini, Codex, GitHub, or LinkedIn. "
             "Every summary_for_user and next_action must explicitly reflect the real goal instead of generic task-management "
             "phrases. When you synthesize acceptance criteria, make them concrete, outcome-based, and specific to the goal. "
+            "If the latest user message clearly changes the task, redirects scope, or asks for a different deliverable, "
+            "set revised_goal and switch the session to that goal instead of forcing the previous one. "
+            "If the user asks a direct conversational question about current capabilities, session state, or what Gemini, "
+            "Codex, or MCP can do, answer it directly in the user's language and prefer a final response instead of "
+            "sending Codex to code. "
             "If you need user input, ask only for the minimum missing information required for the next step, and format "
             "question_for_user so the gateway can show it as a short introduction followed by concise bullet-ready items. "
             "Return exactly one verdict: continue, done, ask_user, or fail. Only use ask_user when Codex truly cannot "

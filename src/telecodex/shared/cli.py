@@ -655,6 +655,7 @@ def _render_gemini_prompt(request_json: str) -> str:
         '  "instruction_for_codex": "next concrete instruction for codex",\n'
         '  "acceptance_criteria": ["criteria to keep or add"],\n'
         '  "completed_acceptance_criteria": ["criteria now complete"],\n'
+        '  "revised_goal": "set only when the user clearly changed the goal or scope",\n'
         '  "verdict": "continue" | "done" | "ask_user" | "fail" | null,\n'
         '  "gemini_plan": "planner notes for the shared session doc",\n'
         '  "review_notes": "review notes after codex work",\n'
@@ -668,6 +669,8 @@ def _render_gemini_prompt(request_json: str) -> str:
         "- Use status=done when the session goal is complete.\n"
         "- Use status=ask_user only when Codex cannot safely continue without a human answer.\n"
         "- Use status=failed when the run should stop due to an unrecoverable problem.\n"
+        "- Set revised_goal only when the latest user message clearly redirects, replaces, or narrows the original goal.\n"
+        "- If the user asks a direct explanatory or capability question you can answer from context, answer it directly and prefer done instead of sending Codex.\n"
         "- Keep instruction_for_codex empty unless status=continue.\n"
         "- Keep the response compact and valid JSON.\n\n"
         "Request JSON:\n"

@@ -234,3 +234,44 @@ def test_worker_orchestrator_prompts_pin_goal_and_language_guidance(tmp_path) ->
 def test_worker_config_defaults_to_gemini_flash() -> None:
     cfg = WorkerConfig()
     assert cfg.gemini.model == "gemini-2.5-flash"
+
+
+def test_worker_orchestrator_can_reframe_goal_from_new_user_message(tmp_path) -> None:
+    cfg = WorkerConfig(
+        workspace_root=str(tmp_path),
+        runs_dir=str(tmp_path / ".runs"),
+        dry_run=True,
+        gemini=AdapterConfig(
+            protocol="gemini_cli",
+            model="gemini-2.5-flash",
+            mock_responses=[
+                MockAdapterResponse(
+                    status="done",
+                    verdict="done",
+                    revised_goal="지금 이 세션에서 Gemini, Codex, MCP가 각각 무엇을 할 수 있는지 설명해줘",
+                    summary_for_user="현재 세션에서 Gemini는 계획과 검토를 맡고, Codex는 구현과 검증을 맡으며, MCP는 shared_goal.md를 읽고 갱신하는 통로입니다.",
+                    acceptance_criteria=["각 구성 요소의 역할을 설명한다"],
+                    completed_acceptance_criteria=["각 구성 요소의 역할을 설명한다"],
+                )
+            ],
+        ),
+        codex=AdapterConfig(protocol="codex_exec_jsonl", default_commands=["pytest"]),
+        execution_policy=ExecutionPolicy(allow_commands=["pytest"]),
+    )
+    orchestrator = WorkerOrchestrator(cfg)
+    request = SessionRequest(
+        goal="오늘 내 이력서 만들어보자",
+        requester_id=1,
+        workspace_path=str(tmp_path),
+        channel="telegram",
+        conversation_id="chat-goal-shift",
+        user_notes=["그냥 응답만 해주고 니가 지금 MCP나 뭐 할 수 있는지 각각 알려줘"],
+    )
+    runtime = _build_runtime(orchestrator, request, "session-goal-shift")
+
+    result = orchestrator.process_session(runtime)
+
+    assert result.summary.goal == "지금 이 세션에서 Gemini, Codex, MCP가 각각 무엇을 할 수 있는지 설명해줘"
+    assert "각 구성 요소의 역할을 설명한다" in result.acceptance_criteria
+    assert "이력서" not in " ".join(result.acceptance_criteria)
+    assert result.summary.state == SessionState.COMPLETED

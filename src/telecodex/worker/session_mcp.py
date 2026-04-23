@@ -82,6 +82,7 @@ class SessionMcpService:
     def session_write_gemini_sections(
         self,
         session_id: str,
+        goal: str = "",
         gemini_plan: str = "",
         gemini_review: str = "",
         next_action: str = "",
@@ -90,9 +91,24 @@ class SessionMcpService:
         completed_acceptance_criteria: list[str] | None = None,
         verdict: str = "",
         status: str = "",
+        replace_goal_context: bool = False,
     ) -> dict[str, Any]:
         request = self.store.load_request(session_id)
         document = self.store.load_document(session_id)
+        if goal.strip():
+            document.goal = goal.strip()
+            request.goal = document.goal
+        if replace_goal_context:
+            document.gemini_plan = ""
+            document.codex_plan = ""
+            document.codex_execution = ""
+            document.codex_verification = ""
+            document.gemini_review = ""
+            document.next_action = ""
+            document.final_outcome = ""
+            document.acceptance_criteria = [item.strip() for item in (acceptance_criteria or []) if item.strip()]
+            document.completed_acceptance_criteria = [item.strip() for item in (completed_acceptance_criteria or []) if item.strip()]
+            request.acceptance_criteria = list(document.acceptance_criteria)
         if gemini_plan:
             document.gemini_plan = merge_text(document.gemini_plan, gemini_plan)
         if gemini_review:
@@ -101,7 +117,9 @@ class SessionMcpService:
             document.next_action = next_action.strip()
         if final_outcome:
             document.final_outcome = final_outcome.strip()
-        merge_checklist(document, acceptance_criteria or [], completed_acceptance_criteria or [])
+        if not replace_goal_context:
+            merge_checklist(document, acceptance_criteria or [], completed_acceptance_criteria or [])
+            request.acceptance_criteria = list(document.acceptance_criteria)
         if verdict:
             document.verdict = SessionVerdict(verdict)
         if status:

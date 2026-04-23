@@ -136,6 +136,7 @@ class GeminiResponse(BaseModel):
     instruction_for_codex: str = ""
     acceptance_criteria: list[str] = Field(default_factory=list)
     completed_acceptance_criteria: list[str] = Field(default_factory=list)
+    revised_goal: str = ""
     verdict: SessionVerdict | None = None
     gemini_plan: str = ""
     review_notes: str = ""
@@ -615,6 +616,7 @@ class MockAdapterResponse(BaseModel):
     instruction_for_codex: str = ""
     acceptance_criteria: list[str] = Field(default_factory=list)
     completed_acceptance_criteria: list[str] = Field(default_factory=list)
+    revised_goal: str = ""
     verdict: str = ""
     gemini_plan: str = ""
     review_notes: str = ""
