@@ -1,172 +1,170 @@
-# Telecodex As A Personal Development Tool
+# 개인 개발 도구로서의 Telecodex
 
-`telecodex` is not a generic chatbot product.
-It is a personal development tool that lets me keep a coding session alive from Telegram while Gemini and Codex split the work.
+`telecodex` 는 범용 챗봇 제품이 아닙니다.
+Telegram에서 하나의 코딩 세션을 계속 이어가되, 그 안에서 Gemini와 Codex가 역할을 나눠 처리하게 만드는 개인 개발 도구입니다.
 
-## The problem it solves
+## 해결하려는 문제
 
-Codex is strong at implementation, but real feature work still needs repeated human steering.
-When the goal is not fully specified up front, I usually have to keep checking the result, restating the objective, and deciding the next step myself.
+Codex는 구현은 잘하지만, 실제 기능 개발은 여전히 사람이 여러 번 방향을 잡아줘야 합니다.
+목표가 처음부터 완전히 정해져 있지 않으면, 보통은 결과를 계속 확인하고 목적을 다시 설명하고 다음 단계를 사람이 직접 정해야 합니다.
 
-I built `telecodex` to reduce that loop:
+`telecodex` 는 이 반복을 줄이기 위해 만들었습니다.
 
-- I give the first goal
-- Gemini keeps the goal, reviews progress, and decides what should happen next
-- Codex executes concrete development work
-- I only step back in when more information is actually needed
+- 첫 목표는 내가 준다
+- Gemini가 목표를 계속 유지하면서 진행 상황을 검토하고 다음 단계를 정한다
+- Codex가 실제 개발 작업을 수행한다
+- 정말 추가 정보가 필요할 때만 내가 다시 개입한다
 
-## Core idea
+## 핵심 아이디어
 
-The system treats one chat thread as one development session.
+이 시스템은 하나의 채팅 스레드를 하나의 개발 세션으로 취급합니다.
 
-High-level loop:
+상위 흐름은 이렇습니다.
 
-1. I send a goal from Telegram
-2. Gemini turns that goal into a plan and acceptance criteria
-3. Codex edits code, runs commands, and reports what changed
-4. Gemini reviews the result against the goal
-5. The session either continues, asks me for missing input, or finishes
+1. Telegram에서 목표를 보낸다
+2. Gemini가 그 목표를 계획과 acceptance criteria로 바꾼다
+3. Codex가 파일을 수정하고 명령을 실행하고 변경 사항을 보고한다
+4. Gemini가 그 결과를 목표와 비교해 리뷰한다
+5. 세션은 계속 진행되거나, 사용자에게 질문하거나, 완료된다
 
-This makes it feel less like "chatting with a code model" and more like running a lightweight personal coding workflow.
+그래서 느낌상 “코드 모델과 대화한다” 보다는 “개인용 개발 워크플로를 돌린다”에 가깝습니다.
 
-## Why the architecture looks like this
+## 왜 이런 아키텍처가 됐는가
 
-The project is split into three main parts:
+프로젝트는 크게 세 부분으로 나뉩니다.
 
 - `gateway`
-  - the conversational entrypoint
-  - receives Telegram messages
-  - formats status updates back to the user
+  - 대화형 진입점
+  - Telegram 메시지를 수신
+  - 사용자에게 상태 업데이트를 다시 보내는 역할
 - `worker`
-  - the private orchestration runtime
-  - runs the Gemini and Codex loop
-  - stores sessions and artifacts
+  - 비공개 오케스트레이션 런타임
+  - Gemini / Codex 루프를 실행
+  - 세션과 산출물을 저장
 - `shared`
-  - config models
-  - typed contracts
-  - CLI wrappers
-  - reusable helpers
+  - 설정 모델
+  - 타입 계약
+  - CLI 래퍼
+  - 재사용 유틸리티
 
-This separation keeps messaging concerns away from orchestration concerns.
-It also makes it easier to keep Telegram as just one adapter instead of the whole system.
+이렇게 나누면 메시징 책임과 오케스트레이션 책임이 분리됩니다.
+또 Telegram이 시스템 전체가 아니라, 하나의 adapter로 남을 수 있습니다.
 
-## Why Gemini, Codex, and MCP each exist
+## Gemini, Codex, MCP가 각각 필요한 이유
 
 - `Gemini`
-  - planner and reviewer
-  - interprets the goal
-  - generates or updates acceptance criteria
-  - decides whether to continue, ask the user something, or finish
+  - planner이자 reviewer
+  - 목표를 해석
+  - acceptance criteria 생성 또는 수정
+  - 계속할지, 사용자에게 물을지, 끝낼지를 결정
 - `Codex`
   - executor
-  - edits files
-  - runs commands
-  - performs verification and reports what changed
-- `MCP-style session bridge`
-  - shared state access layer
-  - keeps Gemini and Codex looking at the same session state
-  - avoids raw free-for-all file editing of shared session data
+  - 파일 수정
+  - 명령 실행
+  - 검증 및 변경 사항 보고
+- `MCP 스타일 세션 브리지`
+  - 공유 상태 접근 계층
+  - Gemini와 Codex가 같은 세션 상태를 바라보게 함
+  - 세션 데이터가 무분별하게 파일 단위로 꼬이지 않게 함
 
-The point is not to use multiple AI tools for novelty.
-It is to give each part a narrower responsibility.
+중요한 건 “AI 도구를 여러 개 써본다”가 아닙니다.
+각 파트가 맡는 책임을 더 좁고 명확하게 나누는 것이 목적입니다.
 
-## Why Python instead of Go
+## 왜 Go가 아니라 Python인가
 
-The earlier shape of the project leaned more toward service infrastructure.
-The new shape is much more about orchestration:
+초기 형태의 프로젝트는 서비스 인프라 쪽에 더 가까웠습니다.
+하지만 지금 형태는 오케스트레이션 비중이 더 큽니다.
 
-- calling external CLIs
-- parsing structured output
-- storing session artifacts
-- iterating on prompts and control flow quickly
+- 외부 CLI 호출
+- 구조화된 출력 파싱
+- 세션 산출물 저장
+- 프롬프트와 제어 흐름의 빠른 반복
 
-That pushed the center of gravity from "static server implementation" toward "fast AI workflow iteration."
-Python fit that better for this version of the tool.
+그래서 무게중심이 “정적 서버 구현” 보다는 “AI 워크플로를 빨리 실험하고 수정하는 런타임” 쪽으로 옮겨갔고, 이번 버전에서는 Python이 더 잘 맞았습니다.
 
-In short:
+짧게 말하면:
 
-- Go was fine for a straightforward bot backend
-- Python was better for a session-based AI orchestration runtime
+- Go는 단순한 봇 백엔드에는 충분히 괜찮았다
+- Python은 세션 기반 AI 오케스트레이션 런타임에 더 잘 맞았다
 
-## What I actually owned while building it
+## 내가 실제로 담당한 부분
 
-Even when AI tools helped with implementation, the core engineering decisions were still mine:
+AI 도구가 구현 속도를 올려줬더라도, 핵심 엔지니어링 판단은 내가 했습니다.
 
-- defining the problem and the intended workflow
-- choosing the Gemini planner / Codex executor split
-- designing the session model and status machine
-- deciding to use a shared session document and structured state access
-- shaping user-facing Telegram responses
-- defining acceptance criteria and completion behavior
-- reviewing generated code, fixing bad edges, and reworking broken flows
-- testing, debugging, and deciding what counted as "good enough" to deploy
+- 어떤 문제를 풀고 어떤 워크플로를 만들지 정의
+- Gemini planner / Codex executor 분리 결정
+- 세션 모델과 상태 머신 설계
+- 공유 세션 문서와 구조화된 상태 접근 방식 결정
+- Telegram 응답 형태 설계
+- acceptance criteria와 완료 기준 설계
+- 생성된 코드 리뷰, 에지 케이스 수정, 흐름 재설계
+- 테스트, 디버깅, 배포 가능 수준 판단
 
-That is the honest framing:
+즉, 더 솔직한 표현은 이겁니다.
 
-AI accelerated implementation, but I owned the architecture, constraints, verification, and final integration.
+AI는 구현 속도를 높여줬지만, 아키텍처와 제약조건, 검증과 최종 통합 책임은 내가 졌습니다.
 
-## How to show that it is a real tool I actually use
+## 이 도구를 실제로 쓰는 프로젝트처럼 보여주는 방법
 
-The easiest demo is not a slide.
-It is a real session.
+가장 쉬운 데모는 슬라이드가 아니라 실제 세션입니다.
 
-Example flow:
+예시:
 
-1. Send:
+1. 다음을 보냅니다.
 
 ```text
-/run Make the Telegram status replies shorter and more readable in Korean.
+/run 한국어 텔레그램 상태 응답을 더 짧고 읽기 쉽게 바꿔줘.
 ```
 
-2. Let Gemini define the plan and criteria
+2. Gemini가 계획과 기준을 정리하게 둡니다.
 
-3. Let Codex make changes and report back
+3. Codex가 변경을 만들고 결과를 보고하게 둡니다.
 
-4. Ask for status:
+4. 상태를 확인합니다.
 
 ```text
 /status
 ```
 
-5. Provide extra direction if needed:
+5. 필요하면 추가 방향을 줍니다.
 
 ```text
-Keep the summary compact and avoid raw JSON in chat replies.
+요약은 더 압축하고 채팅에 raw JSON은 노출하지 마.
 ```
 
-6. Show the updated reply behavior in Telegram
+6. 실제로 바뀐 Telegram 응답을 보여줍니다.
 
-That demonstrates all of the important pieces:
+이 흐름 하나로 아래 요소를 모두 보여줄 수 있습니다.
 
-- real session tracking
-- Gemini planning and review
-- Codex execution
-- user follow-up inside the same conversation
-- goal-driven completion instead of one-shot prompting
+- 실제 세션 추적
+- Gemini 계획 및 리뷰
+- Codex 실행
+- 같은 대화 안에서의 사용자 후속 지시
+- 일회성 프롬프트가 아니라 목표 기반 완료 흐름
 
-## Why the single-node story is the honest default
+## 왜 단일 노드가 가장 솔직한 기본 배포인가
 
-This project is a personal tool first.
-Because of that, the most honest deployment story is:
+이 프로젝트는 우선 개인 도구입니다.
+그래서 가장 솔직한 기본 배포 방식은 다음과 같습니다.
 
-- one Linux server
-- host-managed `codex` and `gemini`
-- `telecodex` installed with `venv + systemd`
-- `worker` bound to localhost
-- `gateway` polling Telegram locally
+- Linux 서버 한 대
+- 호스트에 설치된 `codex` 와 `gemini`
+- `venv + systemd` 로 설치된 `telecodex`
+- localhost에만 바인딩된 `worker`
+- 로컬에서 Telegram polling을 수행하는 `gateway`
 
-That reflects how I would actually run it on a small personal server.
-More complex deployment shapes can exist later, but they should stay secondary to the real usage model.
+이 구성이 실제 사용 방식과 가장 가깝습니다.
+더 복잡한 배포 구조도 가능하지만, 현재의 진짜 사용 모델보다 앞세우면 오히려 부자연스럽습니다.
 
-## Honest limits
+## 솔직한 한계
 
-Current limits are real and worth saying out loud:
+현재 한계도 분명합니다.
 
-- Telegram is the only active chat adapter in v1
-- the system depends on external `codex` and `gemini` CLIs already being installed and authenticated
-- file-based state is fine for personal use, but not meant for large multi-user production workloads
-- very small servers can run it, but heavy builds or tests will still be constrained by local CPU and RAM
+- v1에서 실제로 활성화된 채팅 adapter는 Telegram뿐입니다.
+- 시스템은 외부 `codex` 와 `gemini` CLI가 미리 설치되고 인증되어 있어야 합니다.
+- 파일 기반 상태 저장은 개인 사용에는 충분하지만, 대규모 다중 사용자 환경용은 아닙니다.
+- 아주 작은 서버에서도 돌릴 수는 있지만, 무거운 빌드나 테스트는 결국 로컬 CPU와 RAM 제약을 받습니다.
 
-## One-line portfolio summary
+## 포트폴리오용 한 줄 요약
 
-I built a personal AI development tool that lets me start and continue coding sessions from Telegram, using Gemini to plan and review, Codex to execute, and a shared session state layer to keep one goal moving across multiple turns.
+Telegram에서 코딩 세션을 시작하고 이어갈 수 있도록, Gemini는 계획과 리뷰를 담당하고 Codex는 실행을 담당하며, 공유 세션 상태 계층으로 여러 턴에 걸쳐 하나의 목표를 계속 밀어갈 수 있는 개인용 AI 개발 도구를 만들었습니다.
