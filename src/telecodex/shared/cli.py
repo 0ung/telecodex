@@ -594,22 +594,7 @@ class JsonCliAdapter:
         if not text:
             raise CliExecutionError(f"{self.name} adapter returned empty stdout")
         if self.config.protocol == "gemini_cli":
-            try:
-                outer_json = _extract_last_json_blob(text)
-            except CliExecutionError:
-                return _coerce_gemini_plain_text_response(text)
-            outer = json.loads(outer_json)
-            if not isinstance(outer, dict):
-                return _coerce_gemini_plain_text_response(text)
-            if "status" in outer and "summary_for_user" in outer:
-                return json.dumps(outer, ensure_ascii=False)
-            response_text = str(outer.get("response", "")).strip()
-            if not response_text:
-                return _coerce_gemini_plain_text_response(text)
-            try:
-                return _extract_last_json_blob(response_text)
-            except CliExecutionError:
-                return _coerce_gemini_plain_text_response(response_text)
+            return _extract_gemini_response_json(text)
         if self.config.protocol == "generic_json":
             return _extract_last_json_blob(text)
         if self.config.protocol == "codex_exec_jsonl":
@@ -647,6 +632,48 @@ def _extract_last_json_blob(text: str) -> str:
         except json.JSONDecodeError:
             continue
     raise CliExecutionError("stdout did not contain a valid JSON payload")
+
+
+def _extract_gemini_response_json(text: str) -> str:
+    try:
+        outer_json = _extract_last_json_blob(text)
+    except CliExecutionError:
+        return _coerce_gemini_plain_text_response(text)
+
+    try:
+        return _normalize_gemini_response_payload(json.loads(outer_json))
+    except json.JSONDecodeError:
+        return _coerce_gemini_plain_text_response(text)
+
+
+def _normalize_gemini_response_payload(payload: Any) -> str:
+    if isinstance(payload, dict):
+        if "status" in payload and "summary_for_user" in payload:
+            return json.dumps(payload, ensure_ascii=False)
+        if "response" in payload:
+            return _normalize_gemini_response_payload(payload["response"])
+        return _coerce_gemini_plain_text_response(json.dumps(payload, ensure_ascii=False))
+
+    if isinstance(payload, list):
+        return _coerce_gemini_plain_text_response(json.dumps(payload, ensure_ascii=False))
+
+    if payload is None:
+        return _coerce_gemini_plain_text_response("")
+
+    if isinstance(payload, str):
+        text = payload.strip()
+        if not text:
+            return _coerce_gemini_plain_text_response(text)
+        try:
+            nested_json = _extract_last_json_blob(text)
+        except CliExecutionError:
+            return _coerce_gemini_plain_text_response(text)
+        try:
+            return _normalize_gemini_response_payload(json.loads(nested_json))
+        except json.JSONDecodeError:
+            return _coerce_gemini_plain_text_response(text)
+
+    return _coerce_gemini_plain_text_response(str(payload))
 
 
 def _strip_code_fences(text: str) -> str:

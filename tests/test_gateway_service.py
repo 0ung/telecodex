@@ -323,3 +323,55 @@ def test_gateway_service_ignores_non_direct_messages() -> None:
     )
     service._handle_message(IncomingMessage(channel="slack", conversation_id="C1", sender_id=1, text="build this", is_direct_message=False))
     assert chat.messages == []
+
+
+def test_gateway_service_prompts_instead_of_starting_meta_session() -> None:
+    chat = FakeChat()
+    worker = FakeWorker()
+    worker.active_detail.summary.state = SessionState.COMPLETED
+
+    def fake_list_sessions(channel=None, conversation_id=None, active_only=False):  # noqa: ANN001
+        if active_only:
+            return SessionListResponse(sessions=[])
+        return SessionListResponse(sessions=[worker.active_detail.summary])
+
+    worker.list_sessions = fake_list_sessions  # type: ignore[method-assign]
+    service = GatewayService(
+        cfg=GatewayConfig(
+            telegram_token="token",
+            allowed_user_ids=[1],
+            worker_base_url="http://worker",
+        ),
+        chat=chat,
+        worker=worker,
+    )
+
+    service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text="다시 질문할게"))
+
+    assert chat.messages[-1][1] == "좋아요. 질문이나 요청을 한 문장으로 보내주세요."
+    assert worker.created_requests == []
+
+
+def test_gateway_service_strips_raw_json_from_summary() -> None:
+    chat = FakeChat()
+    worker = FakeWorker()
+    worker.active_detail.summary.state = SessionState.COMPLETED
+    worker.active_detail.summary.verdict = SessionVerdict.DONE
+    worker.active_detail.final_outcome = (
+        '{"status":"done","summary_for_user":"Gemini, Codex, MCP 각각의 역할을 설명합니다.","next_action":""}'
+    )
+    service = GatewayService(
+        cfg=GatewayConfig(
+            telegram_token="token",
+            allowed_user_ids=[1],
+            worker_base_url="http://worker",
+        ),
+        chat=chat,
+        worker=worker,
+    )
+
+    service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text="/status"))
+
+    body = chat.messages[-1][1]
+    assert "Gemini, Codex, MCP 각각의 역할을 설명합니다." in body
+    assert '"status"' not in body

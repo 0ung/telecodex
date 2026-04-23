@@ -518,6 +518,65 @@ def contains_hangul(value: str) -> bool:
     return any("\uac00" <= char <= "\ud7a3" for char in value)
 
 
+def is_conversational_goal(goal: str) -> bool:
+    normalized = goal.strip().casefold()
+    if not normalized:
+        return False
+
+    build_tokens = [
+        "build",
+        "implement",
+        "fix",
+        "refactor",
+        "write",
+        "create",
+        "make",
+        "add",
+        "remove",
+        "update",
+        "deploy",
+        "구현",
+        "수정",
+        "리팩토링",
+        "작성",
+        "만들",
+        "추가",
+        "삭제",
+        "배포",
+        "고쳐",
+        "테스트",
+    ]
+    if any(token in normalized for token in build_tokens):
+        return False
+
+    conversational_tokens = [
+        "what can",
+        "what is",
+        "why",
+        "how",
+        "explain",
+        "tell me",
+        "status",
+        "issue",
+        "problem",
+        "what's wrong",
+        "뭘 할 수",
+        "무엇",
+        "뭐가 문제",
+        "문제지",
+        "왜",
+        "설명",
+        "알려줘",
+        "상태",
+        "가능",
+        "뭐야",
+        "다시 질문할게",
+        "다시 물어볼게",
+        "질문할게",
+    ]
+    return any(token in normalized for token in conversational_tokens)
+
+
 def merge_unique_items(*groups: list[str]) -> list[str]:
     seen: set[str] = set()
     merged: list[str] = []
@@ -659,6 +718,8 @@ def derive_acceptance_criteria(goal: str) -> list[str]:
             "Capture the missing constraints in the shared session document.",
             "Do not mark the session done without explicit scope confirmation.",
         ]
+    if is_conversational_goal(goal):
+        return []
     if contains_hangul(goal):
         return [
             f"사용자 목표를 직접 달성한다: {goal}",

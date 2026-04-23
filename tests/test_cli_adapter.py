@@ -37,6 +37,33 @@ def test_gemini_cli_adapter_extracts_inner_response_json() -> None:
     assert parsed.summary_for_user == "ok"
 
 
+def test_gemini_cli_adapter_extracts_dict_response_payload() -> None:
+    adapter = JsonCliAdapter(
+        "gemini",
+        AdapterConfig(protocol="gemini_cli", command="gemini", model="gemini-2.5-flash"),
+        dry_run=False,
+    )
+    stdout = json.dumps(
+        {
+            "session_id": "s1",
+            "response": {
+                "status": "done",
+                "summary_for_user": "dictionary payload",
+                "instruction_for_codex": "",
+                "acceptance_criteria": [],
+                "reason": "test",
+            },
+            "stats": {},
+        }
+    )
+
+    response_json = adapter._extract_response_json(stdout)  # noqa: SLF001
+    parsed = GeminiResponse.model_validate(json.loads(response_json))
+
+    assert parsed.status.value == "done"
+    assert parsed.summary_for_user == "dictionary payload"
+
+
 def test_gemini_cli_adapter_falls_back_from_plain_text_response() -> None:
     adapter = JsonCliAdapter(
         "gemini",

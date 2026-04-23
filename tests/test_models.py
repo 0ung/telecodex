@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from telecodex.shared.models import CodexResult, CodexStatus, GeminiResponse, GeminiStatus
+from telecodex.shared.models import CodexResult, CodexStatus, GeminiResponse, GeminiStatus, derive_acceptance_criteria
 
 
 def test_gemini_response_normalizes_null_optional_fields() -> None:
@@ -59,3 +59,7 @@ def test_codex_result_normalizes_null_optional_fields() -> None:
     assert parsed.verification_notes == ""
     assert parsed.verified_acceptance_criteria == []
     assert parsed.proposed_completion is True
+
+
+def test_derive_acceptance_criteria_skips_conversational_goals() -> None:
+    assert derive_acceptance_criteria("지금 gemini, codex, mcp가 각각 뭘 할 수 있어?") == []

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import hashlib
+import json
 from dataclasses import dataclass, field
 from threading import Event, Lock, Thread
 
@@ -81,6 +82,9 @@ class GatewayService:
     ) -> None:
         active = self._active_session(channel, conversation_id)
         if active is None:
+            if not attachments and self._is_placeholder_message_without_goal(text):
+                self.chat.send_message(conversation_id, "좋아요. 질문이나 요청을 한 문장으로 보내주세요.")
+                return
             self._run_command(channel, conversation_id, user_id, text, attachments=attachments)
             return
         self.worker.continue_session(active.summary.session_id, SessionContinueRequest(text=text, attachments=attachments))
@@ -282,6 +286,23 @@ class GatewayService:
     def _message_digest(text: str) -> str:
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
+    @staticmethod
+    def _is_placeholder_message_without_goal(text: str) -> bool:
+        normalized = text.strip().casefold()
+        if not normalized:
+            return True
+        placeholders = {
+            "다시 질문할게",
+            "다시 물어볼게",
+            "질문할게",
+            "잠깐만",
+            "잠시만",
+            "잠만",
+            "다시",
+            "다시요",
+        }
+        return normalized in placeholders
+
     def _session_detail_or_none(self, session_id: str) -> SessionDetail | None:
         try:
             return self.worker.get_session(session_id)
@@ -471,7 +492,7 @@ class GatewayService:
 
     @staticmethod
     def _latest_block(text: str) -> str:
-        stripped = text.strip()
+        stripped = GatewayService._extract_display_text(text)
         if not stripped:
             return ""
         blocks = [chunk.strip() for chunk in stripped.replace("\r\n", "\n").split("\n\n") if chunk.strip()]
@@ -479,13 +500,14 @@ class GatewayService:
 
     @staticmethod
     def _compact_text(text: str, limit: int = 320) -> str:
-        cleaned_lines = [line.strip() for line in text.replace("\r\n", "\n").splitlines() if line.strip() and line.strip() != "_None_"]
+        display_text = GatewayService._extract_display_text(text)
+        cleaned_lines = [line.strip() for line in display_text.replace("\r\n", "\n").splitlines() if line.strip() and line.strip() != "_None_"]
         compact = " ".join(cleaned_lines)
         return truncate_text(compact, limit)
 
     @staticmethod
     def _readable_lines(text: str, limit: int = 320, max_items: int = 6) -> list[str]:
-        normalized = text.replace("\r\n", "\n").replace("|", "\n")
+        normalized = GatewayService._extract_display_text(text).replace("\r\n", "\n").replace("|", "\n")
         items: list[str] = []
         for raw_line in normalized.splitlines():
             cleaned = raw_line.strip()
@@ -503,6 +525,37 @@ class GatewayService:
             prefix = "" if index == 0 else "- "
             lines.append(truncate_text(f"{prefix}{item}", limit))
         return lines
+
+    @staticmethod
+    def _extract_display_text(text: str) -> str:
+        stripped = text.strip()
+        if not stripped:
+            return ""
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            return stripped
+        extracted = GatewayService._extract_display_text_from_payload(payload)
+        return extracted or stripped
+
+    @staticmethod
+    def _extract_display_text_from_payload(payload: object) -> str:
+        if isinstance(payload, dict):
+            if "response" in payload:
+                nested = GatewayService._extract_display_text_from_payload(payload["response"])
+                if nested:
+                    return nested
+            for key in ("summary_for_user", "question_for_user", "next_action", "summary", "raw_output", "reason"):
+                value = payload.get(key)
+                if value is None:
+                    continue
+                nested = GatewayService._extract_display_text(str(value))
+                if nested:
+                    return nested
+            return ""
+        if isinstance(payload, str):
+            return payload.strip()
+        return ""
 
     @staticmethod
     def _state_label(state: SessionState) -> str:
