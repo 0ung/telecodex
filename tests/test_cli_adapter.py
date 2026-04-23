@@ -128,6 +128,31 @@ def test_codex_cli_adapter_builds_noninteractive_exec_args() -> None:
     assert args[-1] == "-"
 
 
+def test_gemini_cli_adapter_includes_stderr_when_stdout_is_empty(monkeypatch) -> None:  # noqa: ANN001
+    class Completed:
+        stdout = ""
+        stderr = "rate limit exceeded"
+        returncode = 1
+
+    def fake_run(*args, **kwargs):  # noqa: ANN001
+        return Completed()
+
+    monkeypatch.setattr("telecodex.shared.cli.subprocess.run", fake_run)
+
+    adapter = JsonCliAdapter(
+        "gemini",
+        AdapterConfig(protocol="gemini_cli", command="gemini", model="gemini-2.5-flash"),
+        dry_run=False,
+    )
+
+    try:
+        adapter.execute({"remaining_turns": 1}, GeminiResponse)
+    except Exception as exc:  # noqa: BLE001
+        assert "rate limit exceeded" in str(exc)
+    else:
+        raise AssertionError("expected adapter execution to fail")
+
+
 def test_codex_app_server_adapter_resumes_existing_thread(monkeypatch, tmp_path) -> None:  # noqa: ANN001
     class FakePipe:
         def __init__(self, lines: list[str]) -> None:

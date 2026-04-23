@@ -48,6 +48,9 @@ class GatewayService:
         if text.startswith("/run "):
             self._run_command(message.channel, message.conversation_id, message.sender_id, text[5:].strip(), attachments=attachments)
             return
+        if text == "/run":
+            self.chat.send_message(message.conversation_id, "사용법: `/run <목표>` 또는 설명이 붙은 사진을 보내주세요.")
+            return
         if text == "/status":
             self._status_command(message.channel, message.conversation_id)
             return
@@ -402,6 +405,8 @@ class GatewayService:
         latest_turn = detail.turns[-1] if detail.turns else None
         if detail.final_outcome:
             GatewayService._append_unique_summary(lines, seen, "결과", detail.final_outcome)
+        error_candidate = (detail.error or (detail.latest_job.error if detail.latest_job else "")).strip()
+        GatewayService._append_unique_summary(lines, seen, "오류", error_candidate)
         gemini_candidate = GatewayService._pick_summary(
             latest_turn.gemini.summary_for_user if latest_turn else "",
             detail.gemini_review,

@@ -130,6 +130,21 @@ def test_gateway_service_starts_session_from_plain_text() -> None:
     assert worker.created_requests[-1].goal == "build this"
 
 
+def test_gateway_service_requires_goal_for_bare_run_command() -> None:
+    chat = FakeChat()
+    service = GatewayService(
+        cfg=GatewayConfig(
+            telegram_token="token",
+            allowed_user_ids=[1],
+            worker_base_url="http://worker",
+        ),
+        chat=chat,
+        worker=FakeWorker(),
+    )
+    service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text="/run"))
+    assert chat.messages[-1][1] == "사용법: `/run <목표>` 또는 설명이 붙은 사진을 보내주세요."
+
+
 def test_gateway_service_starts_session_from_photo_caption() -> None:
     chat = FakeChat()
     worker = FakeWorker()
@@ -247,6 +262,29 @@ def test_gateway_service_pushes_session_updates_once_per_change() -> None:
     service._push_session_updates_once()
     assert len(chat.messages) == 2
     assert "완료되었습니다" in chat.messages[-1][1]
+
+
+def test_gateway_service_surfaces_runtime_error_in_summary() -> None:
+    chat = FakeChat()
+    worker = FakeWorker()
+    worker.active_detail.summary.state = SessionState.FAILED
+    worker.active_detail.summary.verdict = SessionVerdict.FAIL
+    worker.active_detail.error = "gemini adapter returned empty stdout; stderr: rate limit exceeded"
+    service = GatewayService(
+        cfg=GatewayConfig(
+            telegram_token="token",
+            allowed_user_ids=[1],
+            worker_base_url="http://worker",
+        ),
+        chat=chat,
+        worker=worker,
+    )
+
+    service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text="/status"))
+
+    body = chat.messages[-1][1]
+    assert "오류" in body
+    assert "rate limit exceeded" in body
 
 
 def test_gateway_service_run_message_seeds_push_cache() -> None:

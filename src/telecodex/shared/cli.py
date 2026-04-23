@@ -127,6 +127,10 @@ class JsonCliAdapter:
             cwd=self._resolve_cwd(payload),
             check=False,
         )
+        if not completed.stdout.strip() and completed.stderr.strip():
+            raise CliExecutionError(
+                f"{self.name} adapter returned empty stdout; stderr: {truncate_text(completed.stderr.strip(), 600)}"
+            )
         response_json = self._extract_response_json(completed.stdout)
         return response_json, completed.stdout, completed.stderr, completed.returncode, args[1:], "", ""
 
