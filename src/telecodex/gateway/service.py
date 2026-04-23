@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 from dataclasses import dataclass, field
 from threading import Event, Lock, Thread
 
@@ -18,6 +19,9 @@ from telecodex.shared.models import (
     SessionState,
     truncate_text,
 )
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -43,6 +47,13 @@ class GatewayService:
         text = message.text.strip()
         attachments = message.attachments
         if message.attachment_errors:
+            self._log_warning(
+                "attachment_validation_failed",
+                channel=message.channel,
+                conversation_id=message.conversation_id,
+                sender_id=message.sender_id,
+                error_count=len(message.attachment_errors),
+            )
             self.chat.send_message(message.conversation_id, self._format_attachment_errors(message.attachment_errors))
             return
         if not text and not attachments:
@@ -144,6 +155,14 @@ class GatewayService:
             self.chat.send_message(conversation_id, body)
             self._remember_session_snapshot(detail)
         except Exception as exc:  # noqa: BLE001
+            self._log_exception(
+                "run_command_failed",
+                exc,
+                channel=channel,
+                conversation_id=conversation_id,
+                sender_id=user_id,
+                attachment_count=len(attachments),
+            )
             self.chat.send_message(conversation_id, f"세션 시작에 실패했습니다: {exc}")
 
     @staticmethod
@@ -160,6 +179,12 @@ class GatewayService:
                 return
             self.chat.send_message(conversation_id, self._format_session_status(detail))
         except Exception as exc:  # noqa: BLE001
+            self._log_exception(
+                "status_command_failed",
+                exc,
+                channel=channel,
+                conversation_id=conversation_id,
+            )
             self.chat.send_message(conversation_id, f"상태를 불러오지 못했습니다: {exc}")
 
     def _runs_command(self, channel: str, conversation_id: str) -> None:
@@ -176,6 +201,12 @@ class GatewayService:
                 )
             self.chat.send_message(conversation_id, "\n".join(lines))
         except Exception as exc:  # noqa: BLE001
+            self._log_exception(
+                "runs_command_failed",
+                exc,
+                channel=channel,
+                conversation_id=conversation_id,
+            )
             self.chat.send_message(conversation_id, f"세션 목록을 불러오지 못했습니다: {exc}")
 
     def _ai_status_command(self, conversation_id: str) -> None:
@@ -183,6 +214,7 @@ class GatewayService:
             status = self.worker.ai_status()
             self.chat.send_message(conversation_id, self._format_ai_status(status))
         except Exception as exc:  # noqa: BLE001
+            self._log_exception("ai_status_command_failed", exc, conversation_id=conversation_id)
             self.chat.send_message(conversation_id, f"AI 런타임 상태를 불러오지 못했습니다: {exc}")
 
     def _show_command(self, conversation_id: str, identifier: str) -> None:
@@ -193,12 +225,14 @@ class GatewayService:
             detail = self.worker.get_session(identifier)
             self.chat.send_message(conversation_id, self._format_session_detail(detail))
             return
-        except Exception:
+        except Exception as exc:
+            self._log_exception("show_session_lookup_failed", exc, conversation_id=conversation_id, identifier=identifier)
             pass
         try:
             detail = self.worker.get_job(identifier)
             self.chat.send_message(conversation_id, self._format_job_detail(detail))
         except Exception as exc:  # noqa: BLE001
+            self._log_exception("show_job_lookup_failed", exc, conversation_id=conversation_id, identifier=identifier)
             self.chat.send_message(conversation_id, f"세션이나 작업 정보를 불러오지 못했습니다: {exc}")
 
     def _stop_command(self, conversation_id: str, identifier: str) -> None:
@@ -210,12 +244,14 @@ class GatewayService:
             label = response.session_id or identifier
             self.chat.send_message(conversation_id, f"`{label}` 세션에 중단 요청을 보냈습니다.")
             return
-        except Exception:
+        except Exception as exc:
+            self._log_exception("stop_session_failed", exc, conversation_id=conversation_id, identifier=identifier)
             pass
         try:
             response = self.worker.cancel_job(identifier)
             self.chat.send_message(conversation_id, f"`{response.job_id}` 작업에 중단 요청을 보냈습니다.")
         except Exception as exc:  # noqa: BLE001
+            self._log_exception("stop_job_failed", exc, conversation_id=conversation_id, identifier=identifier)
             self.chat.send_message(conversation_id, f"세션이나 작업을 중단하지 못했습니다: {exc}")
 
     def _active_session(self, channel: str, conversation_id: str) -> SessionDetail | None:
@@ -242,7 +278,8 @@ class GatewayService:
         while not self._watcher_stop.wait(interval):
             try:
                 self._push_session_updates_once()
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
+                self._log_exception("session_update_push_failed", exc, interval=interval)
                 continue
 
     def _push_session_updates_once(self) -> None:
@@ -379,8 +416,23 @@ class GatewayService:
     def _session_detail_or_none(self, session_id: str) -> SessionDetail | None:
         try:
             return self.worker.get_session(session_id)
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            self._log_exception("session_detail_lookup_failed", exc, session_id=session_id)
             return None
+
+    @staticmethod
+    def _log_warning(action: str, **context) -> None:  # noqa: ANN003
+        logger.warning("%s | %s", action, GatewayService._log_context(context))
+
+    @staticmethod
+    def _log_exception(action: str, exc: Exception, **context) -> None:  # noqa: ANN003
+        merged = {"error_type": exc.__class__.__name__, **context}
+        logger.exception("%s | %s", action, GatewayService._log_context(merged))
+
+    @staticmethod
+    def _log_context(context: dict[str, object]) -> str:
+        parts = [f"{key}={value}" for key, value in context.items() if value not in {None, ''}]
+        return " ".join(parts)
 
     @staticmethod
     def _format_session_brief(detail: SessionDetail, title: str) -> str:

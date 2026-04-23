@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import logging
 from pathlib import Path
 from threading import Event, Lock, Thread
 from typing import Any
@@ -46,6 +47,9 @@ from telecodex.worker.session_docs import SessionDocumentStore, merge_text
 from telecodex.worker.session_mcp import SessionMcpServer, SessionMcpService
 from telecodex.worker.sessions import ConversationSessionStore
 from telecodex.worker.store import FileRunStore
+
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -409,6 +413,15 @@ class WorkerOrchestrator:
             self._refresh_session_detail(state)
             return state.detail
         except Exception as exc:  # noqa: BLE001
+            self._log_exception(
+                "session_runtime_failed",
+                exc,
+                session_id=session_id,
+                run_id=run_id,
+                channel=state.request.channel,
+                conversation_id=state.request.conversation_id,
+                workspace_path=state.request.workspace_path,
+            )
             finished_at = utc_now()
             result = FinalResult(
                 status=FinalStatus.RUNTIME_ERROR,
@@ -485,6 +498,16 @@ class WorkerOrchestrator:
     def _audit(state: SessionRuntimeState, stage: str, message: str) -> None:
         if state.detail.latest_job:
             state.detail.latest_job.audit_log.append(AuditEvent(stage=stage, message=message))
+
+    @staticmethod
+    def _log_exception(action: str, exc: Exception, **context) -> None:  # noqa: ANN003
+        merged = {"error_type": exc.__class__.__name__, **context}
+        logger.exception("%s | %s", action, WorkerOrchestrator._log_context(merged))
+
+    @staticmethod
+    def _log_context(context: dict[str, object]) -> str:
+        parts = [f"{key}={value}" for key, value in context.items() if value not in {None, ""}]
+        return " ".join(parts)
 
     def _resolve_workspace(self, requested_path: str) -> str:
         requested = Path(requested_path)
