@@ -5,7 +5,7 @@ from enum import Enum
 from pathlib import Path
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 def utc_now() -> datetime:
@@ -145,6 +145,35 @@ class GeminiResponse(BaseModel):
     reason: str = ""
     suggested_max_turns: int | None = None
 
+    @field_validator(
+        "summary_for_user",
+        "instruction_for_codex",
+        "revised_goal",
+        "gemini_plan",
+        "review_notes",
+        "next_action",
+        "question_for_user",
+        "reason",
+        mode="before",
+    )
+    @classmethod
+    def _normalize_text_fields(cls, value):  # noqa: ANN001
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value
+        return str(value)
+
+    @field_validator("acceptance_criteria", "completed_acceptance_criteria", mode="before")
+    @classmethod
+    def _normalize_string_lists(cls, value):  # noqa: ANN001
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [str(item) for item in value if item not in {None, ""}]
+        cleaned = str(value).strip()
+        return [cleaned] if cleaned else []
+
 
 class CodexRequest(BaseModel):
     project_path: str
@@ -174,6 +203,39 @@ class CodexResult(BaseModel):
     verification_notes: str = ""
     verified_acceptance_criteria: list[str] = Field(default_factory=list)
     proposed_completion: bool = False
+
+    @field_validator(
+        "summary",
+        "next_step",
+        "raw_output",
+        "codex_plan",
+        "verification_notes",
+        mode="before",
+    )
+    @classmethod
+    def _normalize_text_fields(cls, value):  # noqa: ANN001
+        if value is None:
+            return ""
+        if isinstance(value, str):
+            return value
+        return str(value)
+
+    @field_validator("changed_files", "commands_run", "verified_acceptance_criteria", mode="before")
+    @classmethod
+    def _normalize_string_lists(cls, value):  # noqa: ANN001
+        if value is None:
+            return []
+        if isinstance(value, list):
+            return [str(item) for item in value if item not in {None, ""}]
+        cleaned = str(value).strip()
+        return [cleaned] if cleaned else []
+
+    @field_validator("command_results", mode="before")
+    @classmethod
+    def _normalize_command_results(cls, value):  # noqa: ANN001
+        if value is None:
+            return []
+        return value
 
     def compact_for_gemini(self) -> "CodexResult":
         items = [

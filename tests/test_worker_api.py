@@ -68,11 +68,17 @@ def test_worker_api_creates_and_reads_session(tmp_path) -> None:
     assert created.status_code == 201
     session_id = created.json()["session_id"]
 
-    time.sleep(0.2)
-    loaded = client.get(f"/sessions/{session_id}", headers={"X-Worker-Token": "secret"})
-    assert loaded.status_code == 200
-    assert loaded.json()["summary"]["session_id"] == session_id
-    assert loaded.json()["acceptance_criteria"]
+    loaded_payload = None
+    for _ in range(10):
+        loaded = client.get(f"/sessions/{session_id}", headers={"X-Worker-Token": "secret"})
+        assert loaded.status_code == 200
+        loaded_payload = loaded.json()
+        if loaded_payload["acceptance_criteria"]:
+            break
+        time.sleep(0.1)
+    assert loaded_payload is not None
+    assert loaded_payload["summary"]["session_id"] == session_id
+    assert loaded_payload["acceptance_criteria"]
 
     jobs_payload = []
     for _ in range(10):
