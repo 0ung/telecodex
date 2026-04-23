@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import time
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
@@ -159,3 +160,18 @@ def test_worker_api_reports_ai_status(tmp_path) -> None:
     assert response.status_code == 200
     assert response.json()["codex"]["provider"] == "codex"
     assert response.json()["gemini"]["provider"] == "gemini"
+
+
+def test_worker_app_manages_mcp_lifecycle(tmp_path) -> None:
+    cfg = _build_cfg(tmp_path)
+
+    with (
+        patch("telecodex.worker.orchestrator.WorkerOrchestrator.start") as start,
+        patch("telecodex.worker.orchestrator.WorkerOrchestrator.shutdown") as shutdown,
+    ):
+        with TestClient(create_worker_app(cfg)) as client:
+            response = client.get("/health", headers={"X-Worker-Token": "secret"})
+            assert response.status_code == 200
+
+        start.assert_called_once()
+        shutdown.assert_called_once()
