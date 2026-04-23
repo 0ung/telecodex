@@ -293,6 +293,37 @@ def test_gateway_service_pushes_session_updates_once_per_change() -> None:
     assert "완료되었습니다" in chat.messages[-1][1]
 
 
+def test_gateway_service_primes_existing_sessions_before_starting_watcher() -> None:
+    chat = FakeChat()
+    worker = FakeWorker()
+    worker.active_detail.summary.state = SessionState.CANCELED
+    worker.active_detail.summary.verdict = SessionVerdict.FAIL
+    service = GatewayService(
+        cfg=GatewayConfig(
+            telegram_token="token",
+            allowed_user_ids=[1],
+            worker_base_url="http://worker",
+            session_push_interval_sec=1,
+        ),
+        chat=chat,
+        worker=worker,
+    )
+
+    service._prime_push_state()
+    service._push_session_updates_once()
+
+    assert chat.messages == []
+
+    worker.active_detail.summary.updated_at = worker.active_detail.summary.updated_at + timedelta(seconds=1)
+    worker.active_detail.summary.state = SessionState.COMPLETED
+    worker.active_detail.summary.verdict = SessionVerdict.DONE
+    worker.active_detail.final_outcome = "The work is complete."
+    worker.active_detail.next_action = ""
+    service._push_session_updates_once()
+
+    assert len(chat.messages) == 1
+
+
 def test_gateway_service_surfaces_runtime_error_in_summary() -> None:
     chat = FakeChat()
     worker = FakeWorker()

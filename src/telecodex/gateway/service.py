@@ -30,6 +30,7 @@ class GatewayService:
     chat: ChatAdapter
     worker: WorkerClient
     _push_state: dict[str, tuple[str, str]] = field(default_factory=dict, init=False, repr=False)
+    _push_state_primed: bool = field(default=False, init=False, repr=False)
     _push_lock: Lock = field(default_factory=Lock, init=False, repr=False)
     _watcher_stop: Event = field(default_factory=Event, init=False, repr=False)
     _watcher_thread: Thread | None = field(default=None, init=False, repr=False)
@@ -269,6 +270,8 @@ class GatewayService:
     def _ensure_update_watcher(self) -> None:
         if self._watcher_thread and self._watcher_thread.is_alive():
             return
+        if not self._push_state_primed:
+            self._prime_push_state()
         self._watcher_stop.clear()
         self._watcher_thread = Thread(target=self._watch_session_updates, daemon=True)
         self._watcher_thread.start()
@@ -305,10 +308,31 @@ class GatewayService:
     def _remember_session_snapshot(self, detail: SessionDetail) -> None:
         body = self._format_session_update(detail)
         with self._push_lock:
+            self._push_state_primed = True
             self._push_state[detail.summary.session_id] = (
                 detail.summary.updated_at.isoformat(),
                 self._message_digest(body),
             )
+
+    def _prime_push_state(self) -> None:
+        sessions = self.worker.list_sessions().sessions[:20]
+        primed: dict[str, tuple[str, str]] = {}
+        for summary in sessions:
+            if summary.channel != self.cfg.channel_provider:
+                continue
+            if not summary.conversation_id:
+                continue
+            detail = self._session_detail_or_none(summary.session_id)
+            if detail is None or not self._should_push_session_update(detail):
+                continue
+            body = self._format_session_update(detail)
+            primed[detail.summary.session_id] = (
+                detail.summary.updated_at.isoformat(),
+                self._message_digest(body),
+            )
+        with self._push_lock:
+            self._push_state_primed = True
+            self._push_state.update(primed)
 
     @staticmethod
     def _should_push_session_update(detail: SessionDetail) -> bool:
