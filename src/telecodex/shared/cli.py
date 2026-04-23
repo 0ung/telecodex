@@ -590,12 +590,18 @@ class JsonCliAdapter:
         if not text:
             raise CliExecutionError(f"{self.name} adapter returned empty stdout")
         if self.config.protocol == "gemini_cli":
-            outer = json.loads(_extract_last_json_blob(text))
+            try:
+                outer_json = _extract_last_json_blob(text)
+            except CliExecutionError:
+                return _coerce_gemini_plain_text_response(text)
+            outer = json.loads(outer_json)
             if not isinstance(outer, dict):
-                raise CliExecutionError("gemini adapter returned a non-object payload")
+                return _coerce_gemini_plain_text_response(text)
+            if "status" in outer and "summary_for_user" in outer:
+                return json.dumps(outer, ensure_ascii=False)
             response_text = str(outer.get("response", "")).strip()
             if not response_text:
-                raise CliExecutionError("gemini adapter returned an empty response field")
+                return _coerce_gemini_plain_text_response(text)
             try:
                 return _extract_last_json_blob(response_text)
             except CliExecutionError:
