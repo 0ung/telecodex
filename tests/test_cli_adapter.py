@@ -37,6 +37,27 @@ def test_gemini_cli_adapter_extracts_inner_response_json() -> None:
     assert parsed.summary_for_user == "ok"
 
 
+def test_gemini_cli_adapter_falls_back_from_plain_text_response() -> None:
+    adapter = JsonCliAdapter(
+        "gemini",
+        AdapterConfig(protocol="gemini_cli", command="gemini", model="gemini-2.5-flash"),
+        dry_run=False,
+    )
+    stdout = json.dumps(
+        {
+            "session_id": "s1",
+            "response": "지금 이 세션에서 Gemini는 계획과 검토를 맡고, Codex는 구현과 검증을 맡으며, MCP는 shared_goal.md를 읽고 갱신하는 통로입니다.",
+            "stats": {},
+        }
+    )
+
+    response_json = adapter._extract_response_json(stdout)  # noqa: SLF001
+    parsed = GeminiResponse.model_validate(json.loads(response_json))
+
+    assert parsed.status.value == "done"
+    assert "Gemini는 계획과 검토" in parsed.summary_for_user
+
+
 def test_codex_cli_adapter_extracts_agent_message_json() -> None:
     adapter = JsonCliAdapter(
         "codex",
