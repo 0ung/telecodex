@@ -39,7 +39,11 @@ def create_worker_app(cfg: WorkerConfig) -> FastAPI:
     app = FastAPI(title="telecodex-worker", version="0.2.0", lifespan=lifespan)
 
     def authorize(x_worker_token: str | None = Header(default=None)) -> None:
-        if cfg.worker_token and x_worker_token != cfg.worker_token:
+        if not cfg.worker_token:
+            return
+        if x_worker_token is None or not x_worker_token.strip():
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="missing worker token")
+        if x_worker_token != cfg.worker_token:
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid worker token")
 
     @app.get("/health", response_model=HealthResponse)
