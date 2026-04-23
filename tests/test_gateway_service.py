@@ -375,3 +375,72 @@ def test_gateway_service_strips_raw_json_from_summary() -> None:
     body = chat.messages[-1][1]
     assert "Gemini, Codex, MCP 각각의 역할을 설명합니다." in body
     assert '"status"' not in body
+
+
+def test_gateway_service_routes_status_like_message_to_status() -> None:
+    chat = FakeChat()
+    worker = FakeWorker()
+    service = GatewayService(
+        cfg=GatewayConfig(
+            telegram_token="token",
+            allowed_user_ids=[1],
+            worker_base_url="http://worker",
+        ),
+        chat=chat,
+        worker=worker,
+    )
+
+    service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text="끝이야?"))
+
+    assert worker.continue_requests == []
+    assert "최근 세션" in chat.messages[-1][1]
+
+
+def test_gateway_service_starts_new_session_for_capability_question_during_active_session() -> None:
+    chat = FakeChat()
+    worker = FakeWorker()
+    service = GatewayService(
+        cfg=GatewayConfig(
+            telegram_token="token",
+            allowed_user_ids=[1],
+            worker_base_url="http://worker",
+        ),
+        chat=chat,
+        worker=worker,
+    )
+
+    service._handle_message(
+        IncomingMessage(
+            channel="telegram",
+            conversation_id="10",
+            sender_id=1,
+            text="지금 gemini, codex, mcp가 각각 뭘 할 수 있어?",
+        )
+    )
+
+    assert worker.continue_requests == []
+    assert worker.created_requests[-1].goal == "지금 gemini, codex, mcp가 각각 뭘 할 수 있어?"
+
+
+def test_gateway_service_localizes_known_english_planner_text() -> None:
+    chat = FakeChat()
+    worker = FakeWorker()
+    worker.active_detail.gemini_plan = (
+        "The user's goal is too general to proceed. I need to ask for more specific details about the development task they wish to undertake."
+    )
+    worker.active_detail.gemini_review = ""
+    worker.active_detail.next_action = "어떤 개발 작업을 시작하고 싶으신가요?"
+    service = GatewayService(
+        cfg=GatewayConfig(
+            telegram_token="token",
+            allowed_user_ids=[1],
+            worker_base_url="http://worker",
+        ),
+        chat=chat,
+        worker=worker,
+    )
+
+    service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text="/status"))
+
+    body = chat.messages[-1][1]
+    assert "사용자 목표가 아직 너무 넓어서 바로 진행할 수 없습니다." in body

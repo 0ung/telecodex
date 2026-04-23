@@ -87,6 +87,12 @@ class GatewayService:
                 return
             self._run_command(channel, conversation_id, user_id, text, attachments=attachments)
             return
+        if not attachments and self._is_status_like_message(text):
+            self._status_command(channel, conversation_id)
+            return
+        if self._should_start_new_session_from_active(active, text, attachments):
+            self._run_command(channel, conversation_id, user_id, text, attachments=attachments)
+            return
         self.worker.continue_session(active.summary.session_id, SessionContinueRequest(text=text, attachments=attachments))
         detail = self._session_detail_or_none(active.summary.session_id) or active
         if active.summary.state == SessionState.WAITING_USER:
@@ -302,6 +308,64 @@ class GatewayService:
             "다시요",
         }
         return normalized in placeholders
+
+    @staticmethod
+    def _is_status_like_message(text: str) -> bool:
+        normalized = text.strip().casefold()
+        status_messages = {
+            "끝이야",
+            "끝이야?",
+            "됐어",
+            "됐어?",
+            "완료됐어",
+            "완료됐어?",
+            "완료야",
+            "완료야?",
+            "어디까지 됐어",
+            "어디까지 됐어?",
+            "진행됐어",
+            "진행됐어?",
+        }
+        return normalized in status_messages
+
+    @staticmethod
+    def _should_start_new_session_from_active(
+        active: SessionDetail,
+        text: str,
+        attachments: list[JobAttachment],
+    ) -> bool:
+        if attachments:
+            return False
+        if active.summary.state not in {SessionState.PLANNING, SessionState.REVIEWING, SessionState.WAITING_USER}:
+            return False
+
+        normalized = text.strip().casefold()
+        if not normalized or GatewayService._is_placeholder_message_without_goal(text):
+            return False
+
+        strong_new_goal_tokens = [
+            "gemini",
+            "codex",
+            "mcp",
+            "ai status",
+            "뭘 할 수",
+            "무엇을 할 수",
+            "뭐가 문제",
+            "문제지",
+            "설명해",
+            "설명해줘",
+            "알려줘",
+            "what can",
+            "what is",
+            "why",
+            "how",
+            "issue",
+            "problem",
+        ]
+        if any(token in normalized for token in strong_new_goal_tokens):
+            return True
+
+        return False
 
     def _session_detail_or_none(self, session_id: str) -> SessionDetail | None:
         try:
@@ -534,9 +598,9 @@ class GatewayService:
         try:
             payload = json.loads(stripped)
         except json.JSONDecodeError:
-            return stripped
+            return GatewayService._localize_known_english_text(stripped)
         extracted = GatewayService._extract_display_text_from_payload(payload)
-        return extracted or stripped
+        return GatewayService._localize_known_english_text(extracted or stripped)
 
     @staticmethod
     def _extract_display_text_from_payload(payload: object) -> str:
@@ -554,8 +618,21 @@ class GatewayService:
                     return nested
             return ""
         if isinstance(payload, str):
-            return payload.strip()
+            return GatewayService._localize_known_english_text(payload.strip())
         return ""
+
+    @staticmethod
+    def _localize_known_english_text(text: str) -> str:
+        normalized = " ".join(text.strip().split())
+        replacements = {
+            "The user's goal is too general to proceed. I need to ask for more specific details about the development task they wish to undertake.": (
+                "사용자 목표가 아직 너무 넓어서 바로 진행할 수 없습니다. 어떤 개발 작업을 할지 조금 더 구체적인 설명이 필요합니다."
+            ),
+            "User indicated they want to ask again and provided no new specific goal.": (
+                "사용자가 다시 질문하겠다고 했지만 아직 구체적인 요청은 주지 않았습니다."
+            ),
+        }
+        return replacements.get(normalized, text.strip())
 
     @staticmethod
     def _state_label(state: SessionState) -> str:
