@@ -42,6 +42,9 @@ class GatewayService:
 
         text = message.text.strip()
         attachments = message.attachments
+        if message.attachment_errors:
+            self.chat.send_message(message.conversation_id, self._format_attachment_errors(message.attachment_errors))
+            return
         if not text and not attachments:
             self.chat.send_message(message.conversation_id, "텍스트나 사진을 함께 보내주세요.")
             return
@@ -142,6 +145,12 @@ class GatewayService:
             self._remember_session_snapshot(detail)
         except Exception as exc:  # noqa: BLE001
             self.chat.send_message(conversation_id, f"세션 시작에 실패했습니다: {exc}")
+
+    @staticmethod
+    def _format_attachment_errors(errors: list[str]) -> str:
+        lines = ["첨부를 처리할 수 없습니다."]
+        lines.extend(f"- {item}" for item in errors)
+        return "\n".join(lines)
 
     def _status_command(self, channel: str, conversation_id: str) -> None:
         try:

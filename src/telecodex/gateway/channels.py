@@ -11,7 +11,14 @@ def build_chat_adapter(cfg: GatewayConfig, http_client: ResilientHttpClient) -> 
     if provider == "telegram":
         if not cfg.telegram_token:
             raise ValueError("gateway config: telegram_token is required for telegram provider")
-        return TelegramAdapter(cfg.telegram_token, timeout_sec=cfg.request_timeout_sec, http_client=http_client)
+        return TelegramAdapter(
+            cfg.telegram_token,
+            timeout_sec=cfg.request_timeout_sec,
+            http_client=http_client,
+            max_attachment_bytes=cfg.max_attachment_bytes,
+            max_total_attachment_bytes=cfg.max_total_attachment_bytes,
+            allowed_attachment_mime_types=cfg.allowed_attachment_mime_types,
+        )
     if provider == "slack":
         raise NotImplementedError("slack adapter scaffold is ready, but the runtime client is not implemented yet")
     if provider == "discord":

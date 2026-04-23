@@ -53,6 +53,19 @@ class GatewayConfig:
     poll_timeout_sec: int = 30
     request_timeout_sec: int = 30
     session_push_interval_sec: int = 5
+    max_attachment_bytes: int = 5 * 1024 * 1024
+    max_total_attachment_bytes: int = 10 * 1024 * 1024
+    allowed_attachment_mime_types: list[str] = field(
+        default_factory=lambda: [
+            "image/jpeg",
+            "image/png",
+            "image/webp",
+            "application/pdf",
+            "text/plain",
+            "text/markdown",
+            "application/json",
+        ]
+    )
     request_connect_timeout_sec: float = 5.0
     request_read_timeout_sec: float = 30.0
     request_write_timeout_sec: float = 30.0
@@ -101,6 +114,18 @@ def load_gateway_config(path: str) -> GatewayConfig:
         poll_timeout_sec=int(raw.get("poll_timeout_sec", 30)),
         request_timeout_sec=request_timeout_sec,
         session_push_interval_sec=int(raw.get("session_push_interval_sec", 5)),
+        max_attachment_bytes=int(raw.get("max_attachment_bytes", 5 * 1024 * 1024)),
+        max_total_attachment_bytes=int(raw.get("max_total_attachment_bytes", 10 * 1024 * 1024)),
+        allowed_attachment_mime_types=[str(item) for item in raw.get("allowed_attachment_mime_types", [])]
+        or [
+            "image/jpeg",
+            "image/png",
+            "image/webp",
+            "application/pdf",
+            "text/plain",
+            "text/markdown",
+            "application/json",
+        ],
         request_connect_timeout_sec=float(raw.get("request_connect_timeout_sec", min(5, request_timeout_sec))),
         request_read_timeout_sec=float(raw.get("request_read_timeout_sec", request_timeout_sec)),
         request_write_timeout_sec=float(raw.get("request_write_timeout_sec", request_timeout_sec)),
@@ -114,6 +139,12 @@ def load_gateway_config(path: str) -> GatewayConfig:
         raise ValueError("gateway config: allowed_user_ids is required")
     if not cfg.worker_base_url:
         raise ValueError("gateway config: worker_base_url is required")
+    if cfg.max_attachment_bytes <= 0:
+        raise ValueError("gateway config: max_attachment_bytes must be > 0")
+    if cfg.max_total_attachment_bytes < cfg.max_attachment_bytes:
+        raise ValueError("gateway config: max_total_attachment_bytes must be >= max_attachment_bytes")
+    if not cfg.allowed_attachment_mime_types:
+        raise ValueError("gateway config: allowed_attachment_mime_types is required")
     if cfg.request_connect_timeout_sec <= 0 or cfg.request_read_timeout_sec <= 0:
         raise ValueError("gateway config: request timeouts must be > 0")
     if cfg.request_write_timeout_sec <= 0 or cfg.request_pool_timeout_sec <= 0:

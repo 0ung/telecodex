@@ -177,6 +177,34 @@ def test_gateway_service_starts_session_from_photo_caption() -> None:
     assert "첨부 1개" in chat.messages[-1][1]
 
 
+def test_gateway_service_reports_attachment_validation_errors() -> None:
+    chat = FakeChat()
+    worker = FakeWorker()
+    service = GatewayService(
+        cfg=GatewayConfig(
+            telegram_token="token",
+            allowed_user_ids=[1],
+            worker_base_url="http://worker",
+        ),
+        chat=chat,
+        worker=worker,
+    )
+
+    service._handle_message(
+        IncomingMessage(
+            channel="telegram",
+            conversation_id="10",
+            sender_id=1,
+            text="/run analyze this image",
+            attachment_errors=["`archive.zip` 파일 형식 `application/zip` 은(는) 아직 지원하지 않습니다."],
+        )
+    )
+
+    assert "첨부를 처리할 수 없습니다." in chat.messages[-1][1]
+    assert "application/zip" in chat.messages[-1][1]
+    assert worker.created_requests == []
+
+
 def test_gateway_service_continues_waiting_session() -> None:
     chat = FakeChat()
     worker = FakeWorker()

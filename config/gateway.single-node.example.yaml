@@ -13,3 +13,13 @@ request_pool_timeout_sec: 5
 request_max_retries: 2
 request_retry_backoff_sec: 0.5
 session_push_interval_sec: 5
+max_attachment_bytes: 5242880
+max_total_attachment_bytes: 10485760
+allowed_attachment_mime_types:
+  - "image/jpeg"
+  - "image/png"
+  - "image/webp"
+  - "application/pdf"
+  - "text/plain"
+  - "text/markdown"
+  - "application/json"
