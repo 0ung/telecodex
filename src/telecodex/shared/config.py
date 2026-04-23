@@ -53,6 +53,25 @@ class GatewayConfig:
     poll_timeout_sec: int = 30
     request_timeout_sec: int = 30
     session_push_interval_sec: int = 5
+    max_attachment_bytes: int = 5 * 1024 * 1024
+    max_total_attachment_bytes: int = 10 * 1024 * 1024
+    allowed_attachment_mime_types: list[str] = field(
+        default_factory=lambda: [
+            "image/jpeg",
+            "image/png",
+            "image/webp",
+            "application/pdf",
+            "text/plain",
+            "text/markdown",
+            "application/json",
+        ]
+    )
+    request_connect_timeout_sec: float = 5.0
+    request_read_timeout_sec: float = 30.0
+    request_write_timeout_sec: float = 30.0
+    request_pool_timeout_sec: float = 5.0
+    request_max_retries: int = 2
+    request_retry_backoff_sec: float = 0.5
 
 
 def load_worker_config(path: str) -> WorkerConfig:
@@ -85,6 +104,7 @@ def load_gateway_config(path: str) -> GatewayConfig:
     raw = _load_yaml(path)
     token = os.getenv("TELECODEX_TELEGRAM_TOKEN", raw.get("telegram_token", ""))
     worker_token = os.getenv("TELECODEX_WORKER_TOKEN", raw.get("worker_token", ""))
+    request_timeout_sec = int(raw.get("request_timeout_sec", 30))
     cfg = GatewayConfig(
         channel_provider=str(raw.get("channel_provider", "telegram")),
         telegram_token=token,
@@ -92,8 +112,26 @@ def load_gateway_config(path: str) -> GatewayConfig:
         worker_base_url=str(raw.get("worker_base_url", "")).rstrip("/"),
         worker_token=worker_token,
         poll_timeout_sec=int(raw.get("poll_timeout_sec", 30)),
-        request_timeout_sec=int(raw.get("request_timeout_sec", 30)),
+        request_timeout_sec=request_timeout_sec,
         session_push_interval_sec=int(raw.get("session_push_interval_sec", 5)),
+        max_attachment_bytes=int(raw.get("max_attachment_bytes", 5 * 1024 * 1024)),
+        max_total_attachment_bytes=int(raw.get("max_total_attachment_bytes", 10 * 1024 * 1024)),
+        allowed_attachment_mime_types=[str(item) for item in raw.get("allowed_attachment_mime_types", [])]
+        or [
+            "image/jpeg",
+            "image/png",
+            "image/webp",
+            "application/pdf",
+            "text/plain",
+            "text/markdown",
+            "application/json",
+        ],
+        request_connect_timeout_sec=float(raw.get("request_connect_timeout_sec", min(5, request_timeout_sec))),
+        request_read_timeout_sec=float(raw.get("request_read_timeout_sec", request_timeout_sec)),
+        request_write_timeout_sec=float(raw.get("request_write_timeout_sec", request_timeout_sec)),
+        request_pool_timeout_sec=float(raw.get("request_pool_timeout_sec", min(5, request_timeout_sec))),
+        request_max_retries=int(raw.get("request_max_retries", 2)),
+        request_retry_backoff_sec=float(raw.get("request_retry_backoff_sec", 0.5)),
     )
     if cfg.channel_provider == "telegram" and not cfg.telegram_token:
         raise ValueError("gateway config: telegram_token is required")
@@ -101,6 +139,20 @@ def load_gateway_config(path: str) -> GatewayConfig:
         raise ValueError("gateway config: allowed_user_ids is required")
     if not cfg.worker_base_url:
         raise ValueError("gateway config: worker_base_url is required")
+    if cfg.max_attachment_bytes <= 0:
+        raise ValueError("gateway config: max_attachment_bytes must be > 0")
+    if cfg.max_total_attachment_bytes < cfg.max_attachment_bytes:
+        raise ValueError("gateway config: max_total_attachment_bytes must be >= max_attachment_bytes")
+    if not cfg.allowed_attachment_mime_types:
+        raise ValueError("gateway config: allowed_attachment_mime_types is required")
+    if cfg.request_connect_timeout_sec <= 0 or cfg.request_read_timeout_sec <= 0:
+        raise ValueError("gateway config: request timeouts must be > 0")
+    if cfg.request_write_timeout_sec <= 0 or cfg.request_pool_timeout_sec <= 0:
+        raise ValueError("gateway config: request timeouts must be > 0")
+    if cfg.request_max_retries < 0:
+        raise ValueError("gateway config: request_max_retries must be >= 0")
+    if cfg.request_retry_backoff_sec < 0:
+        raise ValueError("gateway config: request_retry_backoff_sec must be >= 0")
     return cfg
 
 

@@ -30,7 +30,7 @@ def test_telegram_adapter_parses_caption_and_photo(monkeypatch) -> None:  # noqa
     monkeypatch.setattr(TelegramAdapter, "get_file", fake_get_file)
     monkeypatch.setattr(TelegramAdapter, "download_file", fake_download_file)
 
-    adapter = TelegramAdapter(token="token")
+    adapter = TelegramAdapter(token="token", allowed_attachment_mime_types=["image/jpeg"])
     messages = adapter.poll_messages(timeout_sec=30)
 
     assert len(messages) == 1

@@ -14,6 +14,7 @@ class IncomingMessage:
     text: str = ""
     is_direct_message: bool = True
     attachments: list[JobAttachment] = field(default_factory=list)
+    attachment_errors: list[str] = field(default_factory=list)
 
 
 class ChatAdapter(Protocol):
