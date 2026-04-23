@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from telecodex.shared.config import AdapterConfig, WorkerConfig
 from telecodex.shared.models import (
     AdapterExchange,
@@ -275,3 +277,35 @@ def test_worker_orchestrator_can_reframe_goal_from_new_user_message(tmp_path) ->
     assert "각 구성 요소의 역할을 설명한다" in result.acceptance_criteria
     assert "이력서" not in " ".join(result.acceptance_criteria)
     assert result.summary.state == SessionState.COMPLETED
+
+
+def test_worker_orchestrator_logs_runtime_errors(tmp_path, monkeypatch, caplog) -> None:  # noqa: ANN001
+    cfg = WorkerConfig(
+        workspace_root=str(tmp_path),
+        runs_dir=str(tmp_path / ".runs"),
+        dry_run=True,
+    )
+    orchestrator = WorkerOrchestrator(cfg)
+    request = SessionRequest(
+        goal="Handle a runtime failure.",
+        requester_id=1,
+        workspace_path=str(tmp_path),
+        channel="telegram",
+        conversation_id="chat-runtime",
+    )
+    runtime = _build_runtime(orchestrator, request, "session-runtime")
+
+    def raising_execute(payload, response_type):  # noqa: ANN001
+        raise RuntimeError("gemini stdout was empty")
+
+    monkeypatch.setattr(orchestrator.runtime.gemini, "execute", raising_execute)
+
+    with caplog.at_level(logging.ERROR):
+        result = orchestrator.process_session(runtime)
+
+    assert result.summary.state == SessionState.FAILED
+    assert result.error == "gemini stdout was empty"
+    assert "session_runtime_failed" in caplog.text
+    assert "session_id=session-runtime" in caplog.text
+    assert "run_id=session-runtime-run-01" in caplog.text
+    assert "error_type=RuntimeError" in caplog.text
