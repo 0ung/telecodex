@@ -92,6 +92,7 @@ Codex session continuity is keyed by `channel + conversation_id`, so repeated me
 - `.github/workflows/python-ci.yml`: Python `3.10` and `3.12` test workflow
 - `.github/workflows/deploy.yml`: `main` push or manual deploy to the worker and gateway servers
 - [docs/github-actions-deploy.md](docs/github-actions-deploy.md): required repository secrets, variables, and remote deploy behavior
+- [docs/gitflow.md](docs/gitflow.md): branch strategy, mandatory review flow, and protected-branch process
 
 ## Deployment
 
