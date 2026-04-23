@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import time
+from unittest.mock import patch
 
 from fastapi.testclient import TestClient
+import pytest
 
 from telecodex.shared.config import AdapterConfig, WorkerConfig
 from telecodex.shared.models import ExecutionPolicy, MockAdapterResponse
@@ -159,3 +161,57 @@ def test_worker_api_reports_ai_status(tmp_path) -> None:
     assert response.status_code == 200
     assert response.json()["codex"]["provider"] == "codex"
     assert response.json()["gemini"]["provider"] == "gemini"
+
+
+@pytest.mark.parametrize(
+    ("header_value", "expected_detail"),
+    [
+        (None, "missing worker token"),
+        ("", "missing worker token"),
+        ("wrong", "invalid worker token"),
+    ],
+)
+def test_worker_api_rejects_invalid_auth_headers(tmp_path, header_value, expected_detail) -> None:  # noqa: ANN001
+    client = TestClient(create_worker_app(_build_cfg(tmp_path)))
+    headers = {} if header_value is None else {"X-Worker-Token": header_value}
+
+    response = client.get("/health", headers=headers)
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == expected_detail
+
+
+def test_worker_api_rejects_session_creation_without_valid_worker_token(tmp_path) -> None:
+    client = TestClient(create_worker_app(_build_cfg(tmp_path)))
+
+    response = client.post(
+        "/sessions",
+        headers={"X-Worker-Token": "wrong"},
+        json={
+            "goal": "Run",
+            "requester_id": 1,
+            "workspace_path": str(tmp_path),
+            "channel": "telegram",
+            "conversation_id": "chat-auth",
+            "text_only": True,
+            "requires_private_network": True,
+        },
+    )
+
+    assert response.status_code == 401
+    assert response.json()["detail"] == "invalid worker token"
+
+
+def test_worker_app_manages_mcp_lifecycle(tmp_path) -> None:
+    cfg = _build_cfg(tmp_path)
+
+    with (
+        patch("telecodex.worker.orchestrator.WorkerOrchestrator.start") as start,
+        patch("telecodex.worker.orchestrator.WorkerOrchestrator.shutdown") as shutdown,
+    ):
+        with TestClient(create_worker_app(cfg)) as client:
+            response = client.get("/health", headers={"X-Worker-Token": "secret"})
+            assert response.status_code == 200
+
+        start.assert_called_once()
+        shutdown.assert_called_once()

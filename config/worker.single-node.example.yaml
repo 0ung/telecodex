@@ -1,0 +1,35 @@
+host: "127.0.0.1"
+port: 8081
+workspace_root: "/opt/telecodex/current"
+runs_dir: "/opt/telecodex/.runs-single-node"
+max_turns: 6
+max_turns_cap: 6
+dynamic_turn_budget: false
+max_codex_failures: 2
+dry_run: false
+print_io: false
+worker_token: ""
+execution_policy:
+  allow_commands:
+    - git
+    - python
+    - pytest
+  deny_commands:
+    - rm
+    - del
+gemini:
+  protocol: "gemini_cli"
+  command: "/absolute/path/to/gemini"
+  args: []
+  model: "gemini-2.5-flash"
+  timeout_sec: 120
+  retries: 1
+codex:
+  protocol: "codex_app_server"
+  command: "/absolute/path/to/codex"
+  args: []
+  model: ""
+  timeout_sec: 900
+  retries: 0
+  default_commands:
+    - "pytest"

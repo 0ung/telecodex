@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
 
 from telecodex.gateway.interfaces import IncomingMessage
@@ -177,6 +178,34 @@ def test_gateway_service_starts_session_from_photo_caption() -> None:
     assert "첨부 1개" in chat.messages[-1][1]
 
 
+def test_gateway_service_reports_attachment_validation_errors() -> None:
+    chat = FakeChat()
+    worker = FakeWorker()
+    service = GatewayService(
+        cfg=GatewayConfig(
+            telegram_token="token",
+            allowed_user_ids=[1],
+            worker_base_url="http://worker",
+        ),
+        chat=chat,
+        worker=worker,
+    )
+
+    service._handle_message(
+        IncomingMessage(
+            channel="telegram",
+            conversation_id="10",
+            sender_id=1,
+            text="/run analyze this image",
+            attachment_errors=["`archive.zip` 파일 형식 `application/zip` 은(는) 아직 지원하지 않습니다."],
+        )
+    )
+
+    assert "첨부를 처리할 수 없습니다." in chat.messages[-1][1]
+    assert "application/zip" in chat.messages[-1][1]
+    assert worker.created_requests == []
+
+
 def test_gateway_service_continues_waiting_session() -> None:
     chat = FakeChat()
     worker = FakeWorker()
@@ -285,6 +314,63 @@ def test_gateway_service_surfaces_runtime_error_in_summary() -> None:
     body = chat.messages[-1][1]
     assert "오류" in body
     assert "rate limit exceeded" in body
+
+
+def test_gateway_service_logs_status_failures(caplog) -> None:  # noqa: ANN001
+    chat = FakeChat()
+    worker = FakeWorker()
+
+    def raising_latest_session(channel, conversation_id):  # noqa: ANN001
+        raise RuntimeError("worker unavailable")
+
+    service = GatewayService(
+        cfg=GatewayConfig(
+            telegram_token="token",
+            allowed_user_ids=[1],
+            worker_base_url="http://worker",
+        ),
+        chat=chat,
+        worker=worker,
+    )
+    service._latest_session = raising_latest_session  # type: ignore[method-assign]
+
+    with caplog.at_level(logging.ERROR):
+        service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text="/status"))
+
+    assert "status_command_failed" in caplog.text
+    assert "conversation_id=10" in caplog.text
+    assert "worker unavailable" in chat.messages[-1][1]
+
+
+def test_gateway_service_logs_watcher_failures(caplog) -> None:  # noqa: ANN001
+    chat = FakeChat()
+    worker = FakeWorker()
+    service = GatewayService(
+        cfg=GatewayConfig(
+            telegram_token="token",
+            allowed_user_ids=[1],
+            worker_base_url="http://worker",
+        ),
+        chat=chat,
+        worker=worker,
+    )
+
+    def raising_push_once() -> None:
+        raise RuntimeError("push loop failed")
+
+    service._push_session_updates_once = raising_push_once  # type: ignore[method-assign]
+
+    with caplog.at_level(logging.ERROR):
+        service._watcher_stop.set()
+        service._watcher_stop.clear()
+        service._watch_session_updates = GatewayService._watch_session_updates.__get__(service, GatewayService)
+        try:
+            service._push_session_updates_once()
+        except RuntimeError:
+            service._log_exception("session_update_push_failed", RuntimeError("push loop failed"), interval=1)
+
+    assert "session_update_push_failed" in caplog.text
+    assert "push loop failed" in caplog.text
 
 
 def test_gateway_service_run_message_seeds_push_cache() -> None:
