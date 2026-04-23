@@ -335,6 +335,7 @@ class JobAttachment(BaseModel):
     kind: str
     file_name: str
     mime_type: str = "application/octet-stream"
+    size_bytes: int = 0
     telegram_file_id: str = ""
     telegram_file_unique_id: str = ""
     telegram_file_path: str = ""
@@ -344,6 +345,16 @@ class JobAttachment(BaseModel):
     def safe_file_name(self) -> str:
         cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "_" for ch in self.file_name).strip("._")
         return cleaned or "attachment.bin"
+
+    @field_validator("size_bytes", mode="before")
+    @classmethod
+    def _normalize_size_bytes(cls, value):  # noqa: ANN001
+        if value in {None, ""}:
+            return 0
+        size = int(value)
+        if size < 0:
+            raise ValueError("size_bytes must be >= 0")
+        return size
 
 
 class SessionRequest(BaseModel):
