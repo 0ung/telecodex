@@ -21,7 +21,7 @@ gemini:
   protocol: "gemini_cli"
   command: "gemini"
   args: []
-  model: "gemini-2.5-flash-lite"
+  model: "gemini-2.5-flash"
   timeout_sec: 120
   retries: 1
   mock_responses:

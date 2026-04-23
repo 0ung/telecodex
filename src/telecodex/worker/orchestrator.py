@@ -484,16 +484,27 @@ class WorkerOrchestrator:
     @staticmethod
     def _gemini_system_prompt() -> str:
         return (
-            "You are the session planner and reviewer. Read the shared session document, maintain the goal, "
-            "refine or synthesize acceptance criteria, and return one verdict: continue, done, ask_user, or fail. "
-            "Only ask the user for input when Codex cannot safely continue."
+            "You are the session planner and reviewer. Read the shared session document before every turn and keep the "
+            "user's literal goal at the center of your decisions. All user-facing fields you write "
+            "(summary_for_user, gemini_plan, review_notes, next_action, question_for_user, reason) must match the "
+            "user's language. If the user wrote in Korean, reply in natural Korean only and avoid mixed English except "
+            "for unavoidable product names such as Gemini, Codex, GitHub, or LinkedIn. "
+            "Every summary_for_user and next_action must explicitly reflect the real goal instead of generic task-management "
+            "phrases. When you synthesize acceptance criteria, make them concrete, outcome-based, and specific to the goal. "
+            "If you need user input, ask only for the minimum missing information required for the next step, and format "
+            "question_for_user so the gateway can show it as a short introduction followed by concise bullet-ready items. "
+            "Return exactly one verdict: continue, done, ask_user, or fail. Only use ask_user when Codex truly cannot "
+            "continue safely without that missing input."
         )
 
     @staticmethod
     def _codex_system_prompt() -> str:
         return (
-            "You are the execution engine for the current session. Use the shared session document and MCP server "
-            "context, implement the requested change, verify it, and report whether the acceptance criteria appear satisfied. "
+            "You are the execution engine for the current session. Use the shared session document and MCP server context, "
+            "implement the requested change, verify it, and report whether the acceptance criteria appear satisfied. "
+            "All user-facing text you produce (summary, next_step, verification_notes, codex_plan) must match the user's "
+            "language. If the user wrote in Korean, respond in natural Korean and avoid generic English boilerplate. "
+            "Anchor your summary to the actual goal, what you changed, what was verified, and what is still missing. "
             "Do not decide final completion; Gemini owns the final verdict."
         )
 
@@ -503,11 +514,11 @@ class WorkerOrchestrator:
         if result.summary.strip():
             lines.append(result.summary.strip())
         if result.changed_files:
-            lines.append("Changed files: " + ", ".join(result.changed_files))
+            lines.append("변경 파일: " + ", ".join(result.changed_files))
         if result.commands_run:
-            lines.append("Commands run: " + ", ".join(result.commands_run))
+            lines.append("실행 명령: " + ", ".join(result.commands_run))
         if result.next_step.strip():
-            lines.append("Next step suggestion: " + result.next_step.strip())
+            lines.append("다음 제안: " + result.next_step.strip())
         return "\n".join(lines)
 
     @staticmethod
@@ -517,9 +528,9 @@ class WorkerOrchestrator:
             lines.append(result.verification_notes.strip())
         if result.command_results:
             for item in result.command_results:
-                lines.append(f"{item.command}: exit={item.exit_code}")
+                lines.append(f"{item.command}: 종료 코드 {item.exit_code}")
         if result.proposed_completion:
-            lines.append("Codex believes the current implementation is ready for Gemini review.")
+            lines.append("Codex 판단: 현재 구현은 Gemini 검토 단계로 넘길 준비가 되었습니다.")
         return "\n".join(lines)
 
     @staticmethod
@@ -557,7 +568,7 @@ class SessionManager:
             if active_session_id:
                 self._supersede_session(active_session_id)
             session_id = utc_now().strftime("%Y%m%d-%H%M%S-%f")
-            document = self.orchestrator.store.create_session(session_id, request, self.cfg.gemini.model or "gemini-2.5-flash-lite")
+            document = self.orchestrator.store.create_session(session_id, request, self.cfg.gemini.model or "gemini-2.5-flash")
             summary = document.to_summary(request, str(self.orchestrator.store.shared_goal_path(session_id)))
             detail = SessionDetail(
                 summary=summary,

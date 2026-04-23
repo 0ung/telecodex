@@ -37,7 +37,7 @@ class WorkerConfig:
     max_codex_failures: int = 2
     dry_run: bool = True
     print_io: bool = False
-    gemini: AdapterConfig = field(default_factory=lambda: AdapterConfig(protocol="gemini_cli", model="gemini-2.5-flash-lite"))
+    gemini: AdapterConfig = field(default_factory=lambda: AdapterConfig(protocol="gemini_cli", model="gemini-2.5-flash"))
     codex: AdapterConfig = field(default_factory=lambda: AdapterConfig(protocol="codex_app_server", command="codex", timeout_sec=900))
     execution_policy: ExecutionPolicy = field(default_factory=ExecutionPolicy)
     worker_token: str = ""

@@ -60,7 +60,7 @@ class AiRuntimeStatusService:
 
     def _build_gemini_status(self) -> ProviderRuntimeStatus:
         auth_mode, auth_message, auth_ok = self._gemini_auth_status()
-        configured_model = self._configured_model(self.cfg.gemini, default="gemini-2.5-flash-lite")
+        configured_model = self._configured_model(self.cfg.gemini, default="gemini-2.5-flash")
         notes = []
         quota = self.GEMINI_FREE_TIER.get(configured_model)
         if quota is None:

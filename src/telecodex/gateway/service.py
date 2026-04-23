@@ -42,7 +42,7 @@ class GatewayService:
         text = message.text.strip()
         attachments = message.attachments
         if not text and not attachments:
-            self.chat.send_message(message.conversation_id, "Send text, a photo, or both.")
+            self.chat.send_message(message.conversation_id, "텍스트나 사진을 함께 보내주세요.")
             return
 
         if text.startswith("/run "):
@@ -83,11 +83,11 @@ class GatewayService:
         self.worker.continue_session(active.summary.session_id, SessionContinueRequest(text=text, attachments=attachments))
         detail = self._session_detail_or_none(active.summary.session_id) or active
         if active.summary.state == SessionState.WAITING_USER:
-            body = self._format_session_brief(detail, f"Resumed session `{active.summary.session_id}` with your latest input.")
+            body = self._format_session_brief(detail, f"`{active.summary.session_id}` 세션에 최신 입력을 반영했습니다.")
             self.chat.send_message(conversation_id, body)
             self._remember_session_snapshot(detail)
             return
-        body = self._format_session_brief(detail, f"Added your note to active session `{active.summary.session_id}`.")
+        body = self._format_session_brief(detail, f"`{active.summary.session_id}` 세션에 메모를 추가했습니다.")
         self.chat.send_message(conversation_id, body)
         self._remember_session_snapshot(detail)
 
@@ -101,12 +101,12 @@ class GatewayService:
     ) -> None:
         attachments = attachments or []
         if not goal and not attachments:
-            self.chat.send_message(conversation_id, "Usage: /run <goal> or send a photo with a caption.")
+            self.chat.send_message(conversation_id, "사용법: `/run <목표>` 또는 설명이 붙은 사진을 보내주세요.")
             return
         try:
             response = self.worker.create_session(
                 SessionRequest(
-                    goal=goal or "Analyze the attached input and continue the session toward a useful outcome.",
+                    goal=goal or "첨부한 입력을 분석하고, 사용자가 원하는 결과가 나올 때까지 세션을 이어가세요.",
                     requester_id=user_id,
                     workspace_path=".",
                     channel=channel,
@@ -116,56 +116,56 @@ class GatewayService:
                     attachments=attachments,
                 )
             )
-            attachment_suffix = f" with {len(attachments)} attachment(s)" if attachments else ""
+            attachment_suffix = f" / 첨부 {len(attachments)}개" if attachments else ""
             detail = self._session_detail_or_none(response.session_id)
             if detail is None:
                 self.chat.send_message(
                     conversation_id,
-                    f"Session `{response.session_id}` started with state `{response.state.value}`{attachment_suffix}.",
+                    f"`{response.session_id}` 세션을 시작했습니다. 현재 상태는 {self._state_label(response.state)}입니다{attachment_suffix}.",
                 )
                 return
-            body = self._format_session_brief(detail, f"Session `{response.session_id}` started{attachment_suffix}.")
+            body = self._format_session_brief(detail, f"`{response.session_id}` 세션을 시작했습니다{attachment_suffix}.")
             self.chat.send_message(conversation_id, body)
             self._remember_session_snapshot(detail)
         except Exception as exc:  # noqa: BLE001
-            self.chat.send_message(conversation_id, f"Failed to start session: {exc}")
+            self.chat.send_message(conversation_id, f"세션 시작에 실패했습니다: {exc}")
 
     def _status_command(self, channel: str, conversation_id: str) -> None:
         try:
             detail = self._latest_session(channel, conversation_id)
             if detail is None:
-                self.chat.send_message(conversation_id, "No sessions yet.")
+                self.chat.send_message(conversation_id, "아직 시작된 세션이 없습니다.")
                 return
             self.chat.send_message(conversation_id, self._format_session_status(detail))
         except Exception as exc:  # noqa: BLE001
-            self.chat.send_message(conversation_id, f"Failed to fetch status: {exc}")
+            self.chat.send_message(conversation_id, f"상태를 불러오지 못했습니다: {exc}")
 
     def _runs_command(self, channel: str, conversation_id: str) -> None:
         try:
             sessions = self.worker.list_sessions(channel=channel, conversation_id=conversation_id).sessions[:5]
             if not sessions:
-                self.chat.send_message(conversation_id, "No sessions yet.")
+                self.chat.send_message(conversation_id, "아직 시작된 세션이 없습니다.")
                 return
             lines = []
             for item in sessions:
-                summary = GatewayService._compact_text(item.final_summary or item.goal, limit=120)
+                summary = GatewayService._compact_text(item.final_summary or item.goal, limit=180)
                 lines.append(
-                    f"`{item.session_id}` - {item.state.value} - {item.verdict.value if item.verdict else 'pending'} - {summary}"
+                    f"- `{item.session_id}` | {self._state_label(item.state)} | {self._verdict_label(item.verdict)} | {summary}"
                 )
             self.chat.send_message(conversation_id, "\n".join(lines))
         except Exception as exc:  # noqa: BLE001
-            self.chat.send_message(conversation_id, f"Failed to list sessions: {exc}")
+            self.chat.send_message(conversation_id, f"세션 목록을 불러오지 못했습니다: {exc}")
 
     def _ai_status_command(self, conversation_id: str) -> None:
         try:
             status = self.worker.ai_status()
             self.chat.send_message(conversation_id, self._format_ai_status(status))
         except Exception as exc:  # noqa: BLE001
-            self.chat.send_message(conversation_id, f"Failed to fetch AI runtime status: {exc}")
+            self.chat.send_message(conversation_id, f"AI 런타임 상태를 불러오지 못했습니다: {exc}")
 
     def _show_command(self, conversation_id: str, identifier: str) -> None:
         if not identifier:
-            self.chat.send_message(conversation_id, "Usage: /show <session_id>")
+            self.chat.send_message(conversation_id, "사용법: `/show <session_id>`")
             return
         try:
             detail = self.worker.get_session(identifier)
@@ -177,24 +177,24 @@ class GatewayService:
             detail = self.worker.get_job(identifier)
             self.chat.send_message(conversation_id, self._format_job_detail(detail))
         except Exception as exc:  # noqa: BLE001
-            self.chat.send_message(conversation_id, f"Failed to load session or job: {exc}")
+            self.chat.send_message(conversation_id, f"세션이나 작업 정보를 불러오지 못했습니다: {exc}")
 
     def _stop_command(self, conversation_id: str, identifier: str) -> None:
         if not identifier:
-            self.chat.send_message(conversation_id, "Usage: /stop <session_id>")
+            self.chat.send_message(conversation_id, "사용법: `/stop <session_id>`")
             return
         try:
             response = self.worker.cancel_session(identifier)
             label = response.session_id or identifier
-            self.chat.send_message(conversation_id, f"Cancel requested for session `{label}`.")
+            self.chat.send_message(conversation_id, f"`{label}` 세션에 중단 요청을 보냈습니다.")
             return
         except Exception:
             pass
         try:
             response = self.worker.cancel_job(identifier)
-            self.chat.send_message(conversation_id, f"Cancel requested for job `{response.job_id}`.")
+            self.chat.send_message(conversation_id, f"`{response.job_id}` 작업에 중단 요청을 보냈습니다.")
         except Exception as exc:  # noqa: BLE001
-            self.chat.send_message(conversation_id, f"Failed to stop session or job: {exc}")
+            self.chat.send_message(conversation_id, f"세션이나 작업을 중단하지 못했습니다: {exc}")
 
     def _active_session(self, channel: str, conversation_id: str) -> SessionDetail | None:
         sessions = self.worker.list_sessions(channel=channel, conversation_id=conversation_id, active_only=True).sessions
@@ -264,15 +264,15 @@ class GatewayService:
     @staticmethod
     def _format_session_update(detail: SessionDetail) -> str:
         if detail.summary.state == SessionState.WAITING_USER:
-            title = f"Session `{detail.summary.session_id}` needs your input."
+            title = f"`{detail.summary.session_id}` 세션에서 추가 정보가 필요합니다."
         elif detail.summary.state == SessionState.COMPLETED:
-            title = f"Session `{detail.summary.session_id}` completed."
+            title = f"`{detail.summary.session_id}` 세션이 완료되었습니다."
         elif detail.summary.state == SessionState.FAILED:
-            title = f"Session `{detail.summary.session_id}` failed."
+            title = f"`{detail.summary.session_id}` 세션이 실패 상태로 종료되었습니다."
         elif detail.summary.state == SessionState.CANCELED:
-            title = f"Session `{detail.summary.session_id}` was canceled."
+            title = f"`{detail.summary.session_id}` 세션이 취소되었습니다."
         else:
-            title = f"Session `{detail.summary.session_id}` update."
+            title = f"`{detail.summary.session_id}` 세션 업데이트"
         return GatewayService._format_session_brief(detail, title)
 
     @staticmethod
@@ -289,9 +289,9 @@ class GatewayService:
     def _format_session_brief(detail: SessionDetail, title: str) -> str:
         lines = [
             title,
-            f"State: `{detail.summary.state.value}`",
-            f"Verdict: `{detail.summary.verdict.value if detail.summary.verdict else 'pending'}`",
-            f"Goal: {GatewayService._compact_text(detail.summary.goal, limit=180)}",
+            f"상태: {GatewayService._state_label(detail.summary.state)}",
+            f"판단: {GatewayService._verdict_label(detail.summary.verdict)}",
+            f"목표: {GatewayService._compact_text(detail.summary.goal, limit=260)}",
         ]
         progress_line = GatewayService._progress_line(detail)
         if progress_line:
@@ -299,7 +299,7 @@ class GatewayService:
         summary_lines = GatewayService._summary_lines(detail)
         if summary_lines:
             lines.append("")
-            lines.append("Summary")
+            lines.append("진행 요약")
             lines.extend(summary_lines)
         focus_lines = GatewayService._focus_lines(detail)
         if focus_lines:
@@ -311,10 +311,10 @@ class GatewayService:
     @staticmethod
     def _format_session_status(detail: SessionDetail) -> str:
         lines = [
-            f"Latest session `{detail.summary.session_id}`",
-            f"State: `{detail.summary.state.value}`",
-            f"Verdict: `{detail.summary.verdict.value if detail.summary.verdict else 'pending'}`",
-            f"Goal: {GatewayService._compact_text(detail.summary.goal, limit=220)}",
+            f"최근 세션 `{detail.summary.session_id}`",
+            f"상태: {GatewayService._state_label(detail.summary.state)}",
+            f"판단: {GatewayService._verdict_label(detail.summary.verdict)}",
+            f"목표: {GatewayService._compact_text(detail.summary.goal, limit=320)}",
         ]
         progress_line = GatewayService._progress_line(detail)
         if progress_line:
@@ -322,18 +322,18 @@ class GatewayService:
         summary_lines = GatewayService._summary_lines(detail)
         if summary_lines:
             lines.append("")
-            lines.append("Summary")
+            lines.append("진행 요약")
             lines.extend(summary_lines)
         if detail.acceptance_criteria:
             lines.append("")
-            lines.append("Criteria")
+            lines.append("완료 조건")
             for item in detail.acceptance_criteria[:5]:
                 marker = "x" if item in detail.completed_acceptance_criteria else " "
-                lines.append(f"- [{marker}] {GatewayService._compact_text(item, limit=180)}")
+                lines.append(f"- [{marker}] {GatewayService._compact_text(item, limit=260)}")
         dialogue_lines = GatewayService._recent_dialogue_lines(detail, max_turns=2)
         if dialogue_lines:
             lines.append("")
-            lines.append("Recent dialogue")
+            lines.append("최근 대화")
             lines.extend(dialogue_lines)
         focus_lines = GatewayService._focus_lines(detail)
         if focus_lines:
@@ -345,31 +345,31 @@ class GatewayService:
     @staticmethod
     def _format_session_detail(detail: SessionDetail) -> str:
         lines = [
-            f"Session `{detail.summary.session_id}`",
-            f"State: `{detail.summary.state.value}`",
-            f"Verdict: `{detail.summary.verdict.value if detail.summary.verdict else 'pending'}`",
-            f"Goal: {GatewayService._compact_text(detail.summary.goal, limit=220)}",
+            f"세션 `{detail.summary.session_id}`",
+            f"상태: {GatewayService._state_label(detail.summary.state)}",
+            f"판단: {GatewayService._verdict_label(detail.summary.verdict)}",
+            f"목표: {GatewayService._compact_text(detail.summary.goal, limit=320)}",
         ]
         progress_line = GatewayService._progress_line(detail)
         if progress_line:
             lines.append(progress_line)
         if detail.request.attachments:
-            lines.append(f"Attachments: {len(detail.request.attachments)}")
+            lines.append(f"첨부: {len(detail.request.attachments)}개")
         summary_lines = GatewayService._summary_lines(detail)
         if summary_lines:
             lines.append("")
-            lines.append("Summary")
+            lines.append("진행 요약")
             lines.extend(summary_lines)
         if detail.acceptance_criteria:
             lines.append("")
-            lines.append("Criteria")
+            lines.append("완료 조건")
             for item in detail.acceptance_criteria:
                 marker = "x" if item in detail.completed_acceptance_criteria else " "
-                lines.append(f"- [{marker}] {GatewayService._compact_text(item, limit=180)}")
+                lines.append(f"- [{marker}] {GatewayService._compact_text(item, limit=260)}")
         dialogue_lines = GatewayService._recent_dialogue_lines(detail, max_turns=5)
         if dialogue_lines:
             lines.append("")
-            lines.append("Dialogue")
+            lines.append("대화 기록")
             lines.extend(dialogue_lines)
         focus_lines = GatewayService._focus_lines(detail)
         if focus_lines:
@@ -378,8 +378,8 @@ class GatewayService:
             lines.extend(focus_lines)
         if detail.final_outcome:
             lines.append("")
-            lines.append("Final outcome")
-            lines.append(GatewayService._compact_text(detail.final_outcome, limit=280))
+            lines.append("최종 결과")
+            lines.append(GatewayService._compact_text(detail.final_outcome, limit=420))
         return "\n".join(lines)
 
     @staticmethod
@@ -388,11 +388,11 @@ class GatewayService:
             return []
         lines: list[str] = []
         for turn in detail.turns[-max_turns:]:
-            lines.append(f"Turn {turn.turn_number}")
+            lines.append(f"턴 {turn.turn_number}")
             gemini_line = turn.gemini.summary_for_user.strip() or turn.gemini.next_action.strip() or turn.gemini.status.value
             codex_line = turn.codex.summary.strip() or turn.codex.next_step.strip() or turn.codex.status.value
-            lines.append(f"Gemini: {GatewayService._compact_text(gemini_line, limit=180)}")
-            lines.append(f"Codex: {GatewayService._compact_text(codex_line, limit=180)}")
+            lines.append(f"- Gemini: {GatewayService._compact_text(gemini_line, limit=260)}")
+            lines.append(f"- Codex: {GatewayService._compact_text(codex_line, limit=260)}")
         return lines
 
     @staticmethod
@@ -401,40 +401,40 @@ class GatewayService:
         seen: set[str] = set()
         latest_turn = detail.turns[-1] if detail.turns else None
         if detail.final_outcome:
-            GatewayService._append_unique_summary(lines, seen, "Outcome", detail.final_outcome)
+            GatewayService._append_unique_summary(lines, seen, "결과", detail.final_outcome)
         gemini_candidate = GatewayService._pick_summary(
             latest_turn.gemini.summary_for_user if latest_turn else "",
             detail.gemini_review,
             detail.gemini_plan,
         )
-        GatewayService._append_unique_summary(lines, seen, "Gemini", gemini_candidate)
+        GatewayService._append_unique_summary(lines, seen, "계획", gemini_candidate)
         codex_candidate = GatewayService._pick_summary(
             latest_turn.codex.summary if latest_turn else "",
             detail.codex_execution,
             detail.codex_verification,
         )
-        GatewayService._append_unique_summary(lines, seen, "Codex", codex_candidate)
+        GatewayService._append_unique_summary(lines, seen, "실행", codex_candidate)
         review_candidate = GatewayService._pick_summary(
             detail.gemini_review,
             latest_turn.gemini.reason if latest_turn else "",
             detail.codex_verification,
         )
-        GatewayService._append_unique_summary(lines, seen, "Review", review_candidate)
+        GatewayService._append_unique_summary(lines, seen, "검토", review_candidate)
         return lines
 
     @staticmethod
     def _focus_heading(detail: SessionDetail) -> str:
-        return "Needs from you" if detail.summary.state == SessionState.WAITING_USER else "Current focus"
+        return "필요한 정보" if detail.summary.state == SessionState.WAITING_USER else "다음 단계"
 
     @staticmethod
     def _focus_lines(detail: SessionDetail) -> list[str]:
         if detail.summary.state == SessionState.WAITING_USER:
             request_text = detail.next_action or detail.gemini_review or detail.gemini_plan
             if request_text:
-                return [GatewayService._compact_text(request_text, limit=220)]
+                return GatewayService._readable_lines(request_text, limit=260)
             return []
         if detail.next_action:
-            return [GatewayService._compact_text(detail.next_action, limit=220)]
+            return GatewayService._readable_lines(detail.next_action, limit=260)
         return []
 
     @staticmethod
@@ -442,8 +442,8 @@ class GatewayService:
         completed = len(detail.completed_acceptance_criteria)
         total = len(detail.acceptance_criteria)
         if total == 0:
-            return "Acceptance criteria: pending synthesis"
-        return f"Acceptance criteria: {completed}/{total}"
+            return "완료 조건: 정리 중"
+        return f"완료 조건: {completed}/{total}"
 
     @staticmethod
     def _pick_summary(*candidates: str) -> str:
@@ -455,14 +455,14 @@ class GatewayService:
 
     @staticmethod
     def _append_unique_summary(lines: list[str], seen: set[str], label: str, value: str) -> None:
-        compact = GatewayService._compact_text(value, limit=220)
+        compact = GatewayService._compact_text(value, limit=360)
         if not compact:
             return
         key = compact.casefold()
         if key in seen:
             return
         seen.add(key)
-        lines.append(f"{label}: {compact}")
+        lines.append(f"- {label}: {compact}")
 
     @staticmethod
     def _latest_block(text: str) -> str:
@@ -473,37 +473,83 @@ class GatewayService:
         return blocks[-1] if blocks else stripped
 
     @staticmethod
-    def _compact_text(text: str, limit: int = 220) -> str:
+    def _compact_text(text: str, limit: int = 320) -> str:
         cleaned_lines = [line.strip() for line in text.replace("\r\n", "\n").splitlines() if line.strip() and line.strip() != "_None_"]
-        compact = " | ".join(cleaned_lines)
+        compact = " ".join(cleaned_lines)
         return truncate_text(compact, limit)
+
+    @staticmethod
+    def _readable_lines(text: str, limit: int = 320, max_items: int = 6) -> list[str]:
+        normalized = text.replace("\r\n", "\n").replace("|", "\n")
+        items: list[str] = []
+        for raw_line in normalized.splitlines():
+            cleaned = raw_line.strip()
+            if not cleaned or cleaned == "_None_":
+                continue
+            if cleaned.startswith("- "):
+                cleaned = cleaned[2:].strip()
+            elif cleaned.startswith("* "):
+                cleaned = cleaned[2:].strip()
+            items.append(cleaned)
+        if not items:
+            return []
+        lines: list[str] = []
+        for index, item in enumerate(items[:max_items]):
+            prefix = "" if index == 0 else "- "
+            lines.append(truncate_text(f"{prefix}{item}", limit))
+        return lines
+
+    @staticmethod
+    def _state_label(state: SessionState) -> str:
+        return {
+            SessionState.PLANNING: "계획 수립 중",
+            SessionState.EXECUTING: "구현 진행 중",
+            SessionState.REVIEWING: "검토 중",
+            SessionState.WAITING_USER: "입력 대기",
+            SessionState.COMPLETED: "완료",
+            SessionState.FAILED: "실패",
+            SessionState.CANCELED: "취소됨",
+        }.get(state, state.value)
+
+    @staticmethod
+    def _verdict_label(verdict: object) -> str:
+        if verdict is None:
+            return "정리 중"
+        value = getattr(verdict, "value", str(verdict))
+        return {
+            "continue": "계속 진행",
+            "done": "완료",
+            "ask_user": "추가 정보 필요",
+            "fail": "실패",
+            "pending": "정리 중",
+        }.get(str(value), str(value))
 
     @staticmethod
     def _format_job_detail(detail: JobDetail) -> str:
         lines = [
-            f"Job `{detail.summary.job_id}`",
-            f"State: `{detail.summary.state.value}`",
-            f"Goal: {detail.summary.goal}",
+            f"작업 `{detail.summary.job_id}`",
+            f"상태: {detail.summary.state.value}",
+            f"목표: {detail.summary.goal}",
         ]
         if detail.summary.final_status:
-            lines.append(f"Final status: `{detail.summary.final_status.value}`")
+            lines.append(f"최종 상태: {detail.summary.final_status.value}")
         if detail.summary.final_summary:
-            lines.append(f"Summary: {detail.summary.final_summary}")
+            lines.append(f"요약: {detail.summary.final_summary}")
         if detail.report_path:
-            lines.append(f"Report: {detail.report_path}")
+            lines.append(f"리포트: {detail.report_path}")
         return "\n".join(lines)
 
     @staticmethod
     def _help_text() -> str:
         return "\n".join(
             [
-                "/run <goal> - start a new session",
-                "Send a text/photo/file while a session is active - continue or add notes",
-                "/status - show the latest session status",
-                "/ai status - show Codex and Gemini runtime status",
-                "/runs - list recent sessions in this conversation",
-                "/show <session_id> - show one session in detail",
-                "/stop <session_id> - cancel a running session",
+                "/run <목표> - 새 세션 시작",
+                "세션이 진행 중일 때 텍스트/사진/파일 전송 - 이어서 진행하거나 메모 추가",
+                "/status - 최근 세션 상태 보기",
+                "/ai status - Codex / Gemini 런타임 상태 보기",
+                "/runs - 현재 대화의 최근 세션 목록 보기",
+                "/show <session_id> - 특정 세션 자세히 보기",
+                "/stop <session_id> - 실행 중인 세션 중단 요청",
             ]
         )
 
@@ -512,40 +558,40 @@ class GatewayService:
         codex = status.codex
         gemini = status.gemini
         lines = [
-            "AI Runtime Status",
+            "AI 런타임 상태",
             "",
-            f"Codex: {'ready' if codex.auth_ok else 'not ready'}",
-            f"Model: {codex.configured_model or 'default'}",
-            f"Auth: {codex.auth_message}",
+            f"Codex: {'준비됨' if codex.auth_ok else '미준비'}",
+            f"모델: {codex.configured_model or 'default'}",
+            f"인증: {codex.auth_message}",
         ]
         if codex.last_usage:
             lines.append(
-                "Last usage: "
+                "최근 사용량: "
                 f"in={codex.last_usage.input_tokens}, out={codex.last_usage.output_tokens}, total={codex.last_usage.total_tokens}"
             )
         else:
-            lines.append("Last usage: unavailable")
+            lines.append("최근 사용량: 없음")
         lines.extend(
             [
                 "",
-                f"Gemini: {'ready' if gemini.auth_ok else 'not ready'}",
-                f"Model: {gemini.configured_model or 'default'}",
-                f"Auth: {gemini.auth_message}",
+                f"Gemini: {'준비됨' if gemini.auth_ok else '미준비'}",
+                f"모델: {gemini.configured_model or 'default'}",
+                f"인증: {gemini.auth_message}",
             ]
         )
         if gemini.quota:
             lines.append(
-                "Quota: "
+                "쿼터: "
                 f"{gemini.quota.requests_per_minute or '?'} RPM, "
                 f"{gemini.quota.tokens_per_minute or '?'} TPM, "
                 f"{gemini.quota.requests_per_day or '?'} RPD"
             )
         if gemini.last_usage:
             lines.append(
-                "Last usage: "
+                "최근 사용량: "
                 f"in={gemini.last_usage.input_tokens}, out={gemini.last_usage.output_tokens}, total={gemini.last_usage.total_tokens}, "
                 f"req={gemini.last_usage.requests}, err={gemini.last_usage.errors}"
             )
         else:
-            lines.append("Last usage: unavailable")
+            lines.append("최근 사용량: 없음")
         return "\n".join(lines)

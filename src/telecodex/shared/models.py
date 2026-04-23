@@ -451,6 +451,10 @@ def truncate_text(value: str, limit: int) -> str:
     return value[: limit - 3] + "..."
 
 
+def contains_hangul(value: str) -> bool:
+    return any("\uac00" <= char <= "\ud7a3" for char in value)
+
+
 def merge_unique_items(*groups: list[str]) -> list[str]:
     seen: set[str] = set()
     merged: list[str] = []
@@ -591,6 +595,12 @@ def derive_acceptance_criteria(goal: str) -> list[str]:
             "Clarify the user goal before implementation.",
             "Capture the missing constraints in the shared session document.",
             "Do not mark the session done without explicit scope confirmation.",
+        ]
+    if contains_hangul(goal):
+        return [
+            f"사용자 목표를 직접 달성한다: {goal}",
+            "검증 명령이나 수동 확인 근거로 결과물이 목표에 맞는지 확인한다.",
+            "변경 내용, 남은 리스크, 목표 충족 여부를 사용자 언어로 요약한다.",
         ]
     return [
         f"Deliver the requested outcome: {goal}",

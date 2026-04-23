@@ -212,3 +212,25 @@ def test_worker_orchestrator_reuses_codex_thread_for_same_conversation(tmp_path,
         orchestrator.process_session(runtime)
 
     assert seen_thread_ids == ["", "thread_1"]
+
+
+def test_worker_orchestrator_prompts_pin_goal_and_language_guidance(tmp_path) -> None:
+    cfg = WorkerConfig(
+        workspace_root=str(tmp_path),
+        runs_dir=str(tmp_path / ".runs"),
+        dry_run=True,
+    )
+    orchestrator = WorkerOrchestrator(cfg)
+
+    gemini_prompt = orchestrator._gemini_system_prompt()  # noqa: SLF001
+    codex_prompt = orchestrator._codex_system_prompt()  # noqa: SLF001
+
+    assert "literal goal" in gemini_prompt
+    assert "Korean" in gemini_prompt
+    assert "summary_for_user" in gemini_prompt
+    assert "match the user's language" in codex_prompt
+
+
+def test_worker_config_defaults_to_gemini_flash() -> None:
+    cfg = WorkerConfig()
+    assert cfg.gemini.model == "gemini-2.5-flash"

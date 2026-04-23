@@ -43,16 +43,16 @@ class FakeWorker:
                 session_id="session-1",
                 channel="telegram",
                 conversation_id="10",
-                goal="goal",
+                goal="이력서 작성",
                 state=SessionState.WAITING_USER,
                 verdict=SessionVerdict.ASK_USER,
             ),
-            request=SessionRequest(goal="goal", requester_id=1, workspace_path=".", channel="telegram", conversation_id="10"),
-            acceptance_criteria=["Implement the requested change", "Summarize the outcome for the user"],
-            completed_acceptance_criteria=["Implement the requested change"],
-            gemini_review="Reviewed the latest work and one user confirmation is still needed before closing.",
-            codex_execution="Updated the gateway response formatting to expose a compact summary to the user.",
-            next_action="Need one more answer from the user.",
+            request=SessionRequest(goal="이력서 작성", requester_id=1, workspace_path=".", channel="telegram", conversation_id="10"),
+            acceptance_criteria=["이력서 초안을 만든다", "사용자에게 결과를 요약한다"],
+            completed_acceptance_criteria=["이력서 초안을 만든다"],
+            gemini_review="최신 작업을 검토했고, 마무리를 위해 사용자 확인이 하나 더 필요합니다.",
+            codex_execution="게이트웨이 응답 포맷을 수정해 사용자에게 더 읽기 쉬운 요약을 보여주도록 바꿨습니다.",
+            next_action="이력서 초안을 완성하려면 아래 정보를 알려주세요.\n- 이름\n- 이메일\n- 주요 경력",
         )
 
     def create_session(self, request: SessionRequest) -> SessionCreateResponse:
@@ -61,10 +61,10 @@ class FakeWorker:
         self.active_detail.summary.state = SessionState.PLANNING
         self.active_detail.summary.verdict = SessionVerdict.CONTINUE
         self.active_detail.request = request
-        self.active_detail.gemini_plan = "Planner is turning the goal into acceptance criteria and the first Codex task."
-        self.active_detail.gemini_review = "Planner captured the request and is preparing a concise implementation brief."
+        self.active_detail.gemini_plan = "목표를 완료 조건으로 정리하고 첫 Codex 작업 지시를 준비하고 있습니다."
+        self.active_detail.gemini_review = "요청을 반영해 바로 구현 가능한 작업 지시로 다듬는 중입니다."
         self.active_detail.codex_execution = ""
-        self.active_detail.next_action = "Gemini is preparing the first Codex instruction."
+        self.active_detail.next_action = "Gemini가 첫 번째 Codex 작업 지시를 정리하고 있습니다."
         return SessionCreateResponse(session_id="session-1", state=SessionState.PLANNING, verdict=SessionVerdict.CONTINUE)
 
     def list_sessions(self, channel=None, conversation_id=None, active_only=False):  # noqa: ANN001
@@ -89,7 +89,7 @@ class FakeWorker:
                 provider="gemini",
                 auth_ok=True,
                 auth_message="Gemini API key is configured.",
-                configured_model="gemini-2.5-flash-lite",
+                configured_model="gemini-2.5-flash",
                 quota=ProviderQuota(requests_per_minute=15, requests_per_day=1000, tokens_per_minute=250000),
             ),
         )
@@ -107,7 +107,7 @@ def test_gateway_service_rejects_non_text() -> None:
         worker=FakeWorker(),
     )
     service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1))
-    assert chat.messages[-1][1] == "Send text, a photo, or both."
+    assert chat.messages[-1][1] == "텍스트나 사진을 함께 보내주세요."
 
 
 def test_gateway_service_starts_session_from_plain_text() -> None:
@@ -125,8 +125,8 @@ def test_gateway_service_starts_session_from_plain_text() -> None:
     )
     service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text="/run build this"))
     assert "session-1" in chat.messages[-1][1]
-    assert "Summary" in chat.messages[-1][1]
-    assert "Current focus" in chat.messages[-1][1]
+    assert "진행 요약" in chat.messages[-1][1]
+    assert "다음 단계" in chat.messages[-1][1]
     assert worker.created_requests[-1].goal == "build this"
 
 
@@ -159,7 +159,7 @@ def test_gateway_service_starts_session_from_photo_caption() -> None:
             ],
         )
     )
-    assert "attachment" in chat.messages[-1][1]
+    assert "첨부 1개" in chat.messages[-1][1]
 
 
 def test_gateway_service_continues_waiting_session() -> None:
@@ -176,9 +176,9 @@ def test_gateway_service_continues_waiting_session() -> None:
     )
     service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text="use main"))
     assert worker.continue_requests[-1][0] == "session-1"
-    assert "Resumed session" in chat.messages[-1][1]
-    assert "Needs from you" in chat.messages[-1][1]
-    assert "Need one more answer from the user." in chat.messages[-1][1]
+    assert "최신 입력을 반영" in chat.messages[-1][1]
+    assert "필요한 정보" in chat.messages[-1][1]
+    assert "이름" in chat.messages[-1][1]
 
 
 def test_gateway_service_status_shows_summary_sections() -> None:
@@ -194,10 +194,10 @@ def test_gateway_service_status_shows_summary_sections() -> None:
     )
     service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text="/status"))
     body = chat.messages[-1][1]
-    assert "Summary" in body
-    assert "Gemini:" in body
-    assert "Codex:" in body
-    assert "Needs from you" in body
+    assert "진행 요약" in body
+    assert "계획" in body
+    assert "실행" in body
+    assert "필요한 정보" in body
 
 
 def test_gateway_service_reports_ai_runtime_status() -> None:
@@ -213,9 +213,9 @@ def test_gateway_service_reports_ai_runtime_status() -> None:
     )
     service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text="/ai status"))
     body = chat.messages[-1][1]
-    assert "AI Runtime Status" in body
-    assert "Codex: ready" in body
-    assert "Gemini: ready" in body
+    assert "AI 런타임 상태" in body
+    assert "Codex: 준비됨" in body
+    assert "Gemini: 준비됨" in body
 
 
 def test_gateway_service_pushes_session_updates_once_per_change() -> None:
@@ -234,7 +234,7 @@ def test_gateway_service_pushes_session_updates_once_per_change() -> None:
 
     service._push_session_updates_once()
     assert len(chat.messages) == 1
-    assert "needs your input" in chat.messages[-1][1]
+    assert "추가 정보가 필요합니다" in chat.messages[-1][1]
 
     service._push_session_updates_once()
     assert len(chat.messages) == 1
@@ -246,7 +246,7 @@ def test_gateway_service_pushes_session_updates_once_per_change() -> None:
     worker.active_detail.next_action = ""
     service._push_session_updates_once()
     assert len(chat.messages) == 2
-    assert "completed" in chat.messages[-1][1]
+    assert "완료되었습니다" in chat.messages[-1][1]
 
 
 def test_gateway_service_run_message_seeds_push_cache() -> None:
