@@ -6,6 +6,12 @@ worker_base_url: "http://10.20.0.10:8081"
 worker_token: "replace-me"
 poll_timeout_sec: 30
 request_timeout_sec: 30
+request_connect_timeout_sec: 5
+request_read_timeout_sec: 30
+request_write_timeout_sec: 30
+request_pool_timeout_sec: 5
+request_max_retries: 2
+request_retry_backoff_sec: 0.5
 session_push_interval_sec: 5
 max_attachment_bytes: 5242880
 max_total_attachment_bytes: 10485760

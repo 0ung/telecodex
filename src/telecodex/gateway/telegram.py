@@ -4,9 +4,8 @@ import base64
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
-
 from telecodex.gateway.interfaces import IncomingMessage
+from telecodex.shared.http_client import ResilientHttpClient
 from telecodex.shared.models import JobAttachment, infer_mime_type
 
 
@@ -26,6 +25,7 @@ class TelegramAdapter:
         self,
         token: str,
         timeout_sec: int = 30,
+        http_client: ResilientHttpClient | None = None,
         max_attachment_bytes: int = 5 * 1024 * 1024,
         max_total_attachment_bytes: int = 10 * 1024 * 1024,
         allowed_attachment_mime_types: list[str] | None = None,
@@ -34,6 +34,7 @@ class TelegramAdapter:
         self.base_url = f"https://api.telegram.org/bot{token}"
         self.file_base_url = f"https://api.telegram.org/file/bot{token}"
         self.timeout_sec = timeout_sec
+        self.http = http_client
         self._offset: int | None = None
         self.max_attachment_bytes = max_attachment_bytes
         self.max_total_attachment_bytes = max_total_attachment_bytes
@@ -58,33 +59,32 @@ class TelegramAdapter:
         }
         if offset is not None:
             payload["offset"] = offset
-        response = httpx.get(f"{self.base_url}/getUpdates", params=payload, timeout=timeout_sec + 10)
+        response = self._http().get(f"{self.base_url}/getUpdates", params=payload, retryable=True)
         response.raise_for_status()
         body = response.json()
         return body.get("result", [])
 
     def send_message(self, chat_id: int, text: str) -> None:
-        response = httpx.post(
+        response = self._http().post(
             f"{self.base_url}/sendMessage",
             json={"chat_id": chat_id, "text": text},
-            timeout=self.timeout_sec,
         )
         response.raise_for_status()
 
     def get_file(self, file_id: str) -> dict[str, Any]:
-        response = httpx.get(
+        response = self._http().get(
             f"{self.base_url}/getFile",
             params={"file_id": file_id},
-            timeout=self.timeout_sec,
+            retryable=True,
         )
         response.raise_for_status()
         body = response.json()
         return body["result"]
 
     def download_file(self, file_path: str) -> bytes:
-        response = httpx.get(
+        response = self._http().get(
             f"{self.file_base_url}/{file_path}",
-            timeout=self.timeout_sec,
+            retryable=True,
         )
         response.raise_for_status()
         return response.content
@@ -192,6 +192,11 @@ class TelegramAdapter:
         if size_bytes >= 1024:
             return f"{size_bytes / 1024:.1f}KB"
         return f"{size_bytes}B"
+
+    def _http(self) -> ResilientHttpClient:
+        if self.http is None:
+            raise RuntimeError("telegram adapter requires an http client")
+        return self.http
 
 
 TelegramClient = TelegramAdapter
