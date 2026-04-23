@@ -1,0 +1,30 @@
+name: pr-policy
+
+on:
+  pull_request:
+
+jobs:
+  validate-target:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate branch flow
+        shell: bash
+        env:
+          BASE_REF: ${{ github.base_ref }}
+          HEAD_REF: ${{ github.head_ref }}
+        run: |
+          set -euo pipefail
+
+          echo "Validating PR flow: ${HEAD_REF} -> ${BASE_REF}"
+
+          if [[ "${BASE_REF}" == "main" && "${HEAD_REF}" != "develop" ]]; then
+            echo "::error::Only develop can open pull requests into main."
+            exit 1
+          fi
+
+          if [[ "${BASE_REF}" == "develop" && ( "${HEAD_REF}" == "develop" || "${HEAD_REF}" == "main" ) ]]; then
+            echo "::error::Work branches must open pull requests into develop. Do not target develop from main or develop itself."
+            exit 1
+          fi
+
+          echo "Branch policy check passed."

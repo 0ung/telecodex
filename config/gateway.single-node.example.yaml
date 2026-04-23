@@ -1,0 +1,9 @@
+channel_provider: "telegram"
+telegram_token: ""
+allowed_user_ids:
+  - 123456789
+worker_base_url: "http://127.0.0.1:8081"
+worker_token: ""
+poll_timeout_sec: 30
+request_timeout_sec: 30
+session_push_interval_sec: 5

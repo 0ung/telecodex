@@ -8,6 +8,10 @@ This document captures the new Python runtime layout for the Telegram-only `tele
 - Worker node: private FastAPI service that runs Gemini/Codex orchestration
 - Network: Gateway reaches Worker over a WireGuard-protected private address
 
+This split-node model remains the stronger isolation option, but it is no longer the only deployment shape.
+For single-user or single-server installs, the project now also supports a single-node bootstrap where gateway and worker
+run on the same host while `codex` and `gemini` stay host-managed prerequisites.
+
 ## Python packages
 
 - `telecodex.gateway`: Telegram polling process and worker API client
@@ -20,6 +24,7 @@ This document captures the new Python runtime layout for the Telegram-only `tele
 - Gateway should use the worker private address distributed over WireGuard.
 - The gateway and worker share JSON contracts but do not share state.
 - Run artifacts are stored on the worker host under the configured `runs_dir`.
+- Single-node mode should prefer `systemd + venv` over Docker because external AI CLI auth remains host-owned.
 
 ## Current v1 scope
 
