@@ -29,13 +29,15 @@
 ## 현재 v1 범위
 
 - 텍스트 기반 Telegram 요청
+- Telegram 사진/문서 첨부 ingestion
+- 첨부 MIME allowlist와 크기 제한
+- Telegram long polling 기반 gateway
 - Gemini planner/reviewer + Codex executor 오케스트레이션
 - 파일 기반 실행 산출물과 최종 리포트 생성
 - gateway/worker 분리용 Dockerfile 제공
 
 ## 현재 v1 범위 밖
 
-- Telegram 사진 또는 문서 ingestion
 - 공개 webhook 기반 봇 수신
 - 다중 테넌트 접근 제어
 - DB 기반 실행 상태 저장

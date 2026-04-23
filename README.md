@@ -24,7 +24,10 @@ Telegram user -> Gateway -> Worker -> Gemini CLI + Codex App Server
 ## 현재 v1 범위
 
 - 텍스트 중심 대화형 세션
+- Telegram 사진/문서 첨부 ingestion
+- 첨부 MIME allowlist, 파일별 최대 크기, 총첨부 용량 제한
 - 허용 사용자 allowlist
+- Telegram long polling 기반 gateway
 - 세션 생성, 이어쓰기, 상태 조회, 목록 조회, 취소를 위한 private worker API
 - worker `runs_dir` 아래에 저장되는 파일 기반 실행 산출물
 - 채팅 대화 단위로 유지되는 Codex `threadId`
