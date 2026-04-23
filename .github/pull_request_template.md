@@ -1,21 +1,21 @@
-## Summary
+## 요약
 
-- 
+- 무엇이 바뀌었는지 적어주세요.
+- 왜 이 변경이 필요한지 적어주세요.
 
-## Target branch
+## 브랜치 흐름
 
-- [ ] `feature/* -> develop`
-- [ ] `release/* -> main`
-- [ ] `hotfix/* -> main`
+- [ ] 이 PR은 저장소 흐름에 맞게 `작업 브랜치 -> develop` 으로 보냅니다.
+- [ ] 이 PR이 `main` 을 대상으로 한다면, 소스 브랜치는 `develop` 입니다.
+- [ ] `main` 또는 `develop` 에 직접 push 하지 않았습니다.
 
-## Checks
+## 검증
 
-- [ ] I selected the correct base branch
-- [ ] I requested review from `@2tpghkk8yp-stack`
-- [ ] Required status checks passed
-- [ ] I resolved open review conversations
-- [ ] If this is a `hotfix/*` or `release/*`, I planned the follow-up sync back to `develop`
+- [ ] CI가 통과했습니다.
+- [ ] 관련 로컬 테스트 또는 수동 검증을 마쳤습니다.
 
-## Verification
+## 위험도
 
-- 
+- [ ] 사용자에게 보이는 동작이 바뀝니다.
+- [ ] 배포 또는 롤아웃 위험이 있습니다.
+- [ ] 후속 작업이 필요합니다.

@@ -1,0 +1,15 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  case "${remote_ref}" in
+    refs/heads/main|refs/heads/develop)
+      echo "Direct pushes to main and develop are blocked in this repo."
+      echo "Use a pull request instead."
+      echo "Allowed flow: work branch -> develop, then develop -> main."
+      exit 1
+      ;;
+  esac
+done
+
+exit 0
