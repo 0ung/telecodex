@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
+
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 
 from telecodex.shared.config import WorkerConfig
@@ -23,9 +25,18 @@ from telecodex.worker.orchestrator import SessionManager
 
 
 def create_worker_app(cfg: WorkerConfig) -> FastAPI:
-    app = FastAPI(title="telecodex-worker", version="0.2.0")
     manager = SessionManager(cfg)
     ai_status = AiRuntimeStatusService(cfg)
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI):
+        manager.startup()
+        try:
+            yield
+        finally:
+            manager.shutdown()
+
+    app = FastAPI(title="telecodex-worker", version="0.2.0", lifespan=lifespan)
 
     def authorize(x_worker_token: str | None = Header(default=None)) -> None:
         if cfg.worker_token and x_worker_token != cfg.worker_token:
