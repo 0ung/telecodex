@@ -513,6 +513,46 @@ def test_gateway_service_routes_status_like_message_to_status() -> None:
     assert "최근 세션" in chat.messages[-1][1]
 
 
+def test_gateway_service_routes_progress_nudge_to_status() -> None:
+    chat = FakeChat()
+    worker = FakeWorker()
+    service = GatewayService(
+        cfg=GatewayConfig(
+            telegram_token="token",
+            allowed_user_ids=[1],
+            worker_base_url="http://worker",
+        ),
+        chat=chat,
+        worker=worker,
+    )
+
+    service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text="진행중이야?"))
+
+    assert worker.continue_requests == []
+    assert "최근 세션" in chat.messages[-1][1]
+
+
+def test_gateway_service_starts_new_session_for_korean_goal_redirect() -> None:
+    chat = FakeChat()
+    worker = FakeWorker()
+    service = GatewayService(
+        cfg=GatewayConfig(
+            telegram_token="token",
+            allowed_user_ids=[1],
+            worker_base_url="http://worker",
+        ),
+        chat=chat,
+        worker=worker,
+    )
+
+    text = "아니야 이제 부산 관광사이트 깃허브 연결해서 세팅하자"
+    service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text=text))
+
+    assert worker.continue_requests == []
+    assert worker.created_requests[-1].goal == text
+    assert "목표: 아니야 이제 부산 관광사이트 깃허브 연결해서 세팅하자" in chat.messages[-1][1]
+
+
 def test_gateway_service_starts_new_session_for_capability_question_during_active_session() -> None:
     chat = FakeChat()
     worker = FakeWorker()
@@ -561,3 +601,38 @@ def test_gateway_service_localizes_known_english_planner_text() -> None:
 
     body = chat.messages[-1][1]
     assert "사용자 목표가 아직 너무 넓어서 바로 진행할 수 없습니다." in body
+
+
+def test_gateway_service_strips_bulletized_json_from_user_visible_sections() -> None:
+    chat = FakeChat()
+    worker = FakeWorker()
+    worker.active_detail.gemini_plan = """
+{
+- "status": "continue",
+- "summary_for_user": "부산 관광사이트의 GitHub 연결과 배포 설정을 확인하는 단계입니다.",
+- "instruction_for_codex": "print(codebase_investigator.investigate(objective='secret'))",
+- "acceptance_criteria": [
+- "Gitflow 전략을 적용한다."
+- ],
+- "next_action": "프로젝트의 Git 설정과 배포 구성을 확인합니다."
+}
+"""
+    worker.active_detail.gemini_review = ""
+    worker.active_detail.next_action = worker.active_detail.gemini_plan
+    service = GatewayService(
+        cfg=GatewayConfig(
+            telegram_token="token",
+            allowed_user_ids=[1],
+            worker_base_url="http://worker",
+        ),
+        chat=chat,
+        worker=worker,
+    )
+
+    service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text="/status"))
+
+    body = chat.messages[-1][1]
+    assert "부산 관광사이트의 GitHub 연결과 배포 설정을 확인하는 단계입니다." in body
+    assert '"status"' not in body
+    assert "instruction_for_codex" not in body
+    assert "codebase_investigator" not in body

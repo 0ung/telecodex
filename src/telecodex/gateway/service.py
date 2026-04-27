@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from threading import Event, Lock, Thread
 
@@ -385,16 +386,28 @@ class GatewayService:
         status_messages = {
             "끝이야",
             "끝이야?",
+            "안해",
+            "안해?",
+            "하고 있어",
+            "하고 있어?",
             "됐어",
             "됐어?",
             "완료됐어",
             "완료됐어?",
             "완료야",
             "완료야?",
+            "진행중",
+            "진행중?",
+            "진행중이야",
+            "진행중이야?",
             "어디까지 됐어",
             "어디까지 됐어?",
             "진행됐어",
             "진행됐어?",
+            "작업중",
+            "작업중?",
+            "작업중이야",
+            "작업중이야?",
         }
         return normalized in status_messages
 
@@ -413,11 +426,21 @@ class GatewayService:
         if not normalized or GatewayService._is_placeholder_message_without_goal(text):
             return False
 
+        if GatewayService._looks_like_goal_redirect(normalized):
+            return True
+
         strong_new_goal_tokens = [
             "gemini",
             "codex",
             "mcp",
             "ai status",
+            "github",
+            "gitflow",
+            "git flow",
+            "깃허브",
+            "깃플로우",
+            "브랜치 보호",
+            "부산 관광",
             "뭘 할 수",
             "무엇을 할 수",
             "뭐가 문제",
@@ -436,6 +459,35 @@ class GatewayService:
             return True
 
         return False
+
+    @staticmethod
+    def _looks_like_goal_redirect(normalized: str) -> bool:
+        redirect_markers = [
+            "아니야",
+            "아님",
+            "그게 아니라",
+            "이제 ",
+            "자 ",
+            "다시 ",
+            "새로 ",
+        ]
+        if not any(normalized.startswith(marker) for marker in redirect_markers):
+            return False
+        goal_markers = [
+            "사이트",
+            "프로젝트",
+            "깃허브",
+            "github",
+            "브랜치",
+            "배포",
+            "세팅",
+            "설정",
+            "연결",
+            "개발",
+            "수정",
+            "전략",
+        ]
+        return any(marker in normalized for marker in goal_markers)
 
     def _session_detail_or_none(self, session_id: str) -> SessionDetail | None:
         try:
@@ -631,7 +683,7 @@ class GatewayService:
     @staticmethod
     def _append_unique_summary(lines: list[str], seen: set[str], label: str, value: str) -> None:
         compact = GatewayService._compact_text(value, limit=360)
-        if not compact:
+        if not compact or GatewayService._is_internal_display_text(compact):
             return
         key = compact.casefold()
         if key in seen:
@@ -662,10 +714,14 @@ class GatewayService:
             cleaned = raw_line.strip()
             if not cleaned or cleaned == "_None_":
                 continue
+            if GatewayService._is_internal_display_text(cleaned):
+                continue
             if cleaned.startswith("- "):
                 cleaned = cleaned[2:].strip()
             elif cleaned.startswith("* "):
                 cleaned = cleaned[2:].strip()
+            if GatewayService._is_internal_display_text(cleaned):
+                continue
             items.append(cleaned)
         if not items:
             return []
@@ -680,9 +736,13 @@ class GatewayService:
         stripped = text.strip()
         if not stripped:
             return ""
-        try:
-            payload = json.loads(stripped)
-        except json.JSONDecodeError:
+        payload = GatewayService._parse_jsonish_payload(stripped)
+        if payload is None:
+            extracted = GatewayService._extract_display_field_from_jsonish_text(stripped)
+            if extracted:
+                return GatewayService._localize_known_english_text(extracted)
+            if GatewayService._looks_like_structured_payload(stripped):
+                return ""
             return GatewayService._localize_known_english_text(stripped)
         extracted = GatewayService._extract_display_text_from_payload(payload)
         return GatewayService._localize_known_english_text(extracted or stripped)
@@ -705,6 +765,91 @@ class GatewayService:
         if isinstance(payload, str):
             return GatewayService._localize_known_english_text(payload.strip())
         return ""
+
+    @staticmethod
+    def _parse_jsonish_payload(text: str) -> object | None:
+        for candidate in GatewayService._json_text_candidates(text):
+            try:
+                return json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+        return None
+
+    @staticmethod
+    def _json_text_candidates(text: str) -> list[str]:
+        stripped = text.strip()
+        if not stripped:
+            return []
+        variants = [stripped, GatewayService._strip_markdown_json_bullets(stripped)]
+        candidates: list[str] = []
+        for variant in variants:
+            if not variant:
+                continue
+            candidates.append(variant)
+            object_start = variant.find("{")
+            object_end = variant.rfind("}")
+            if 0 <= object_start < object_end:
+                candidates.append(variant[object_start : object_end + 1].strip())
+        unique: list[str] = []
+        for candidate in candidates:
+            if candidate and candidate not in unique:
+                unique.append(candidate)
+        return unique
+
+    @staticmethod
+    def _strip_markdown_json_bullets(text: str) -> str:
+        lines: list[str] = []
+        for line in text.splitlines():
+            stripped = line.lstrip()
+            indent = line[: len(line) - len(stripped)]
+            if stripped.startswith(("- ", "* ")):
+                candidate = stripped[2:].lstrip()
+                if candidate.startswith(('"', "{", "}", "[", "]")):
+                    line = indent + candidate
+            lines.append(line)
+        return "\n".join(lines)
+
+    @staticmethod
+    def _extract_display_field_from_jsonish_text(text: str) -> str:
+        for candidate in GatewayService._json_text_candidates(text):
+            for key in ("summary_for_user", "question_for_user", "next_action", "summary", "reason"):
+                pattern = rf'"{re.escape(key)}"\s*:\s*"((?:\\.|[^"\\])*)"'
+                match = re.search(pattern, candidate, flags=re.DOTALL)
+                if not match:
+                    continue
+                raw_value = match.group(1)
+                try:
+                    value = json.loads(f'"{raw_value}"')
+                except json.JSONDecodeError:
+                    value = raw_value
+                extracted = GatewayService._extract_display_text(str(value))
+                if extracted:
+                    return extracted
+        return ""
+
+    @staticmethod
+    def _looks_like_structured_payload(text: str) -> bool:
+        normalized = text.casefold()
+        return (
+            normalized.startswith(("{", "- {", "* {"))
+            or '"status"' in normalized
+            or '"summary_for_user"' in normalized
+            or '"instruction_for_codex"' in normalized
+            or '"acceptance_criteria"' in normalized
+        )
+
+    @staticmethod
+    def _is_internal_display_text(text: str) -> bool:
+        normalized = text.casefold()
+        internal_markers = [
+            '"instruction_for_codex"',
+            "instruction_for_codex",
+            '"acceptance_criteria"',
+            '"completed_acceptance_criteria"',
+            "codebase_investigator",
+            "print(",
+        ]
+        return any(marker in normalized for marker in internal_markers)
 
     @staticmethod
     def _localize_known_english_text(text: str) -> str:
