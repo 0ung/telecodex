@@ -61,5 +61,8 @@ def test_codex_result_normalizes_null_optional_fields() -> None:
     assert parsed.proposed_completion is True
 
 
-def test_derive_acceptance_criteria_skips_conversational_goals() -> None:
-    assert derive_acceptance_criteria("지금 gemini, codex, mcp가 각각 뭘 할 수 있어?") == []
+def test_derive_acceptance_criteria_does_not_special_case_goal_text() -> None:
+    criteria = derive_acceptance_criteria("현재 도구 역할을 설명한다.")
+
+    assert criteria
+    assert "현재 도구 역할을 설명한다." in criteria[0]

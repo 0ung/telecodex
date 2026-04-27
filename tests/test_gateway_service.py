@@ -442,7 +442,7 @@ def test_gateway_service_ignores_non_direct_messages() -> None:
     assert chat.messages == []
 
 
-def test_gateway_service_prompts_instead_of_starting_meta_session() -> None:
+def test_gateway_service_starts_session_for_any_freeform_without_active_session() -> None:
     chat = FakeChat()
     worker = FakeWorker()
     worker.active_detail.summary.state = SessionState.COMPLETED
@@ -463,10 +463,10 @@ def test_gateway_service_prompts_instead_of_starting_meta_session() -> None:
         worker=worker,
     )
 
-    service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text="다시 질문할게"))
+    service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text="다음 작업을 준비해줘"))
 
-    assert chat.messages[-1][1] == "좋아요. 질문이나 요청을 한 문장으로 보내주세요."
-    assert worker.created_requests == []
+    assert worker.created_requests[-1].goal == "다음 작업을 준비해줘"
+    assert "세션을 시작했습니다" in chat.messages[-1][1]
 
 
 def test_gateway_service_strips_raw_json_from_summary() -> None:
@@ -499,12 +499,12 @@ def test_gateway_service_completed_status_hides_stale_turn_details() -> None:
     worker = FakeWorker()
     worker.active_detail.summary.state = SessionState.COMPLETED
     worker.active_detail.summary.verdict = SessionVerdict.DONE
-    worker.active_detail.summary.goal = "BusanConnect 저장소를 프로젝트에 연결합니다."
-    worker.active_detail.acceptance_criteria = ["BusanConnect 저장소가 clone되어 있습니다."]
-    worker.active_detail.completed_acceptance_criteria = ["BusanConnect 저장소가 clone되어 있습니다."]
-    worker.active_detail.final_outcome = "Python 설치는 제외했고, BusanConnect 저장소 연결만 완료했습니다."
-    worker.active_detail.gemini_plan = "파이썬 설치를 진행하고 저장소를 복제하겠습니다."
-    worker.active_detail.codex_execution = "sudo apt-get install python3는 실행 정책 때문에 실행하지 않았습니다."
+    worker.active_detail.summary.goal = "저장소를 프로젝트에 연결합니다."
+    worker.active_detail.acceptance_criteria = ["저장소가 프로젝트 디렉터리에 연결되어 있습니다."]
+    worker.active_detail.completed_acceptance_criteria = ["저장소가 프로젝트 디렉터리에 연결되어 있습니다."]
+    worker.active_detail.final_outcome = "취소된 하위 작업은 제외했고, 저장소 연결만 완료했습니다."
+    worker.active_detail.gemini_plan = "하위 작업과 저장소 연결을 함께 진행하겠습니다."
+    worker.active_detail.codex_execution = "취소된 하위 작업은 실행 정책 때문에 실행하지 않았습니다."
     worker.active_detail.next_action = "세션 목표가 완료되었습니다."
     service = GatewayService(
         cfg=GatewayConfig(
@@ -519,12 +519,12 @@ def test_gateway_service_completed_status_hides_stale_turn_details() -> None:
     service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text="/status"))
 
     body = chat.messages[-1][1]
-    assert "Python 설치는 제외했고, BusanConnect 저장소 연결만 완료했습니다." in body
-    assert "sudo apt-get" not in body
+    assert "취소된 하위 작업은 제외했고, 저장소 연결만 완료했습니다." in body
+    assert "실행 정책 때문에 실행하지 않았습니다" not in body
     assert "최근 대화" not in body
 
 
-def test_gateway_service_routes_status_like_message_to_status() -> None:
+def test_gateway_service_continues_any_freeform_when_session_is_active() -> None:
     chat = FakeChat()
     worker = FakeWorker()
     service = GatewayService(
@@ -537,13 +537,32 @@ def test_gateway_service_routes_status_like_message_to_status() -> None:
         worker=worker,
     )
 
-    service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text="끝이야?"))
+    service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text="후속 입력입니다"))
+
+    assert worker.continue_requests[-1][1].text == "후속 입력입니다"
+    assert worker.created_requests == []
+
+
+def test_gateway_service_status_requires_explicit_command() -> None:
+    chat = FakeChat()
+    worker = FakeWorker()
+    service = GatewayService(
+        cfg=GatewayConfig(
+            telegram_token="token",
+            allowed_user_ids=[1],
+            worker_base_url="http://worker",
+        ),
+        chat=chat,
+        worker=worker,
+    )
+
+    service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text="/status"))
 
     assert worker.continue_requests == []
     assert "최근 세션" in chat.messages[-1][1]
 
 
-def test_gateway_service_routes_progress_nudge_to_status() -> None:
+def test_gateway_service_run_command_starts_new_session_even_when_active() -> None:
     chat = FakeChat()
     worker = FakeWorker()
     service = GatewayService(
@@ -556,34 +575,14 @@ def test_gateway_service_routes_progress_nudge_to_status() -> None:
         worker=worker,
     )
 
-    service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text="진행중이야?"))
+    service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text="/run 새 목표를 시작합니다"))
 
     assert worker.continue_requests == []
-    assert "최근 세션" in chat.messages[-1][1]
+    assert worker.created_requests[-1].goal == "새 목표를 시작합니다"
+    assert "세션을 시작했습니다" in chat.messages[-1][1]
 
 
-def test_gateway_service_starts_new_session_for_korean_goal_redirect() -> None:
-    chat = FakeChat()
-    worker = FakeWorker()
-    service = GatewayService(
-        cfg=GatewayConfig(
-            telegram_token="token",
-            allowed_user_ids=[1],
-            worker_base_url="http://worker",
-        ),
-        chat=chat,
-        worker=worker,
-    )
-
-    text = "아니야 이제 부산 관광사이트 깃허브 연결해서 세팅하자"
-    service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text=text))
-
-    assert worker.continue_requests == []
-    assert worker.created_requests[-1].goal == text
-    assert "목표: 아니야 이제 부산 관광사이트 깃허브 연결해서 세팅하자" in chat.messages[-1][1]
-
-
-def test_gateway_service_starts_new_session_for_capability_question_during_active_session() -> None:
+def test_gateway_service_does_not_infer_new_session_from_freeform_content() -> None:
     chat = FakeChat()
     worker = FakeWorker()
     service = GatewayService(
@@ -601,15 +600,15 @@ def test_gateway_service_starts_new_session_for_capability_question_during_activ
             channel="telegram",
             conversation_id="10",
             sender_id=1,
-            text="지금 gemini, codex, mcp가 각각 뭘 할 수 있어?",
+            text="새로운 이야기를 하는 것처럼 보여도 일반 텍스트는 현재 세션으로 전달합니다",
         )
     )
 
-    assert worker.continue_requests == []
-    assert worker.created_requests[-1].goal == "지금 gemini, codex, mcp가 각각 뭘 할 수 있어?"
+    assert worker.continue_requests[-1][1].text == "새로운 이야기를 하는 것처럼 보여도 일반 텍스트는 현재 세션으로 전달합니다"
+    assert worker.created_requests == []
 
 
-def test_gateway_service_localizes_known_english_planner_text() -> None:
+def test_gateway_service_preserves_planner_text_without_canned_translation() -> None:
     chat = FakeChat()
     worker = FakeWorker()
     worker.active_detail.gemini_plan = (
@@ -630,7 +629,7 @@ def test_gateway_service_localizes_known_english_planner_text() -> None:
     service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text="/status"))
 
     body = chat.messages[-1][1]
-    assert "사용자 목표가 아직 너무 넓어서 바로 진행할 수 없습니다." in body
+    assert "The user's goal is too general to proceed." in body
 
 
 def test_gateway_service_strips_bulletized_json_from_user_visible_sections() -> None:
@@ -639,10 +638,10 @@ def test_gateway_service_strips_bulletized_json_from_user_visible_sections() -> 
     worker.active_detail.gemini_plan = """
 {
 - "status": "continue",
-- "summary_for_user": "부산 관광사이트의 GitHub 연결과 배포 설정을 확인하는 단계입니다.",
-- "instruction_for_codex": "print(codebase_investigator.investigate(objective='secret'))",
+- "summary_for_user": "구조화 응답에서 사용자 요약을 추출합니다.",
+- "instruction_for_codex": "internal tool instruction",
 - "acceptance_criteria": [
-- "Gitflow 전략을 적용한다."
+- "사용자에게 보여줄 요약만 출력한다."
 - ],
 - "next_action": "프로젝트의 Git 설정과 배포 구성을 확인합니다."
 }
@@ -662,7 +661,7 @@ def test_gateway_service_strips_bulletized_json_from_user_visible_sections() -> 
     service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text="/status"))
 
     body = chat.messages[-1][1]
-    assert "부산 관광사이트의 GitHub 연결과 배포 설정을 확인하는 단계입니다." in body
+    assert "구조화 응답에서 사용자 요약을 추출합니다." in body
     assert '"status"' not in body
     assert "instruction_for_codex" not in body
-    assert "codebase_investigator" not in body
+    assert "internal tool instruction" not in body

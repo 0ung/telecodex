@@ -76,10 +76,10 @@ def test_gemini_cli_adapter_extracts_bulletized_json_payload() -> None:
             "response": """
 {
 - "status": "continue",
-- "summary_for_user": "부산 관광사이트의 GitHub 설정을 진행합니다.",
-- "instruction_for_codex": "print(codebase_investigator.investigate(objective='secret'))",
+- "summary_for_user": "구조화 응답을 복구합니다.",
+- "instruction_for_codex": "internal tool instruction",
 - "acceptance_criteria": [
-- "Gitflow 전략을 적용한다."
+- "불릿 형태의 JSON을 파싱한다."
 - ],
 - "reason": "test"
 }
@@ -92,8 +92,8 @@ def test_gemini_cli_adapter_extracts_bulletized_json_payload() -> None:
     parsed = GeminiResponse.model_validate(json.loads(response_json))
 
     assert parsed.status.value == "continue"
-    assert parsed.summary_for_user == "부산 관광사이트의 GitHub 설정을 진행합니다."
-    assert "codebase_investigator" in parsed.instruction_for_codex
+    assert parsed.summary_for_user == "구조화 응답을 복구합니다."
+    assert parsed.instruction_for_codex == "internal tool instruction"
 
 
 def test_gemini_cli_adapter_falls_back_from_plain_text_response() -> None:

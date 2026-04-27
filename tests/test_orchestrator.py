@@ -291,10 +291,10 @@ def test_worker_orchestrator_replaces_goal_criteria_on_revised_done(tmp_path) ->
                 MockAdapterResponse(
                     status="done",
                     verdict="done",
-                    revised_goal="https://github.com/0ung/BusanConnect 저장소를 프로젝트에 연결합니다.",
-                    summary_for_user="Python 설치는 제외했고, BusanConnect 저장소 연결만 완료했습니다.",
-                    acceptance_criteria=["BusanConnect 저장소가 프로젝트 디렉터리에 clone되어 있습니다."],
-                    completed_acceptance_criteria=["BusanConnect 저장소가 프로젝트 디렉터리에 clone되어 있습니다."],
+                    revised_goal="저장소를 프로젝트에 연결합니다.",
+                    summary_for_user="취소된 하위 작업은 제외했고, 저장소 연결만 완료했습니다.",
+                    acceptance_criteria=["저장소가 프로젝트 디렉터리에 연결되어 있습니다."],
+                    completed_acceptance_criteria=["저장소가 프로젝트 디렉터리에 연결되어 있습니다."],
                 )
             ],
         ),
@@ -303,23 +303,23 @@ def test_worker_orchestrator_replaces_goal_criteria_on_revised_done(tmp_path) ->
     )
     orchestrator = WorkerOrchestrator(cfg)
     request = SessionRequest(
-        goal="파이썬 설치를 진행하고 BusanConnect 저장소를 연결해줘",
+        goal="하위 작업을 진행하고 저장소를 연결해줘",
         requester_id=1,
         workspace_path=str(tmp_path),
         channel="telegram",
         conversation_id="chat-revised-done",
-        acceptance_criteria=["시스템에 Python 3이 성공적으로 설치됩니다.", "BusanConnect 저장소가 clone됩니다."],
-        user_notes=["아니지 왜 파이썬을 설치할려고 그래??"],
+        acceptance_criteria=["취소된 하위 작업이 완료됩니다.", "저장소가 연결됩니다."],
+        user_notes=["첫 번째 하위 작업은 제외하고 저장소 연결만 진행해줘"],
     )
     runtime = _build_runtime(orchestrator, request, "session-revised-done")
 
     result = orchestrator.process_session(runtime)
 
     assert result.summary.state == SessionState.COMPLETED
-    assert result.summary.goal == "https://github.com/0ung/BusanConnect 저장소를 프로젝트에 연결합니다."
-    assert result.acceptance_criteria == ["BusanConnect 저장소가 프로젝트 디렉터리에 clone되어 있습니다."]
+    assert result.summary.goal == "저장소를 프로젝트에 연결합니다."
+    assert result.acceptance_criteria == ["저장소가 프로젝트 디렉터리에 연결되어 있습니다."]
     assert result.completed_acceptance_criteria == result.acceptance_criteria
-    assert "Python" not in " ".join(result.acceptance_criteria)
+    assert "취소된 하위 작업" not in " ".join(result.acceptance_criteria)
 
 
 def test_worker_orchestrator_logs_runtime_errors(tmp_path, monkeypatch, caplog) -> None:  # noqa: ANN001
