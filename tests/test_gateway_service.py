@@ -221,8 +221,8 @@ def test_gateway_service_continues_waiting_session() -> None:
     service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text="use main"))
     assert worker.continue_requests[-1][0] == "session-1"
     assert "최신 입력을 반영" in chat.messages[-1][1]
-    assert "필요한 정보" in chat.messages[-1][1]
-    assert "이름" in chat.messages[-1][1]
+    assert "필요한 정보" not in chat.messages[-1][1]
+    assert "이름" not in chat.messages[-1][1]
 
 
 def test_gateway_service_status_shows_summary_sections() -> None:
@@ -522,6 +522,8 @@ def test_gateway_service_completed_status_hides_stale_turn_details() -> None:
     assert "취소된 하위 작업은 제외했고, 저장소 연결만 완료했습니다." in body
     assert "실행 정책 때문에 실행하지 않았습니다" not in body
     assert "최근 대화" not in body
+    assert "다음 단계" not in body
+    assert "세션 목표가 완료되었습니다." not in body
 
 
 def test_gateway_service_continues_any_freeform_when_session_is_active() -> None:

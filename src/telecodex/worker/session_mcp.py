@@ -124,7 +124,11 @@ class SessionMcpService:
             document.verdict = SessionVerdict(verdict)
         if status:
             document.status = SessionState(status)
+        if final_outcome or document.status.is_terminal:
+            document.next_action = ""
         self.store.save_document(document, request)
+        if document.status.is_terminal:
+            self.store.set_active_session(document.channel, document.conversation_id, None)
         return self.session_read(session_id)
 
     def session_write_codex_sections(
