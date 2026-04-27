@@ -35,7 +35,10 @@ def main() -> None:
             http_client=http_client,
         ),
     )
-    service.poll_forever()
+    try:
+        service.poll_forever()
+    finally:
+        service.stop()
 
 
 if __name__ == "__main__":

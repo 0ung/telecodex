@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 import logging
 from pathlib import Path
 from threading import Event, Lock, Thread
@@ -40,6 +41,7 @@ from telecodex.shared.models import (
     generate_final_report,
     merge_unique_items,
     resolve_session_verdict,
+    truncate_text,
     update_rolling_summary,
     utc_now,
 )
@@ -98,7 +100,7 @@ class WorkerOrchestrator:
         session_id = state.summary.session_id
         state.run_counter += 1
         run_id = f"{session_id}-run-{state.run_counter:02d}"
-        store = FileRunStore(self.cfg.runs_dir, run_id)
+        store = FileRunStore(self.cfg.runs_dir, run_id, max_attachment_bytes=self.cfg.max_attachment_bytes)
         started_at = utc_now()
         effective_workspace = self._resolve_workspace(state.request.workspace_path)
         state.request.workspace_path = effective_workspace
@@ -629,6 +631,7 @@ class SessionManager:
 
     def create_session(self, request: SessionRequest) -> SessionSummary:
         with self._lock:
+            request = self._with_recent_conversation_context(request)
             active_session_id = self.orchestrator.store.get_active_session(request.channel, request.conversation_id)
             if active_session_id:
                 self._supersede_session(active_session_id)
@@ -653,11 +656,61 @@ class SessionManager:
             self._start_background_processing(runtime)
             return runtime.summary
 
+    def _with_recent_conversation_context(self, request: SessionRequest) -> SessionRequest:
+        context_note = self._recent_conversation_context_note(request)
+        if not context_note:
+            return request
+        marker = "[recent conversation context]"
+        if any(note.startswith(marker) for note in request.user_notes):
+            return request
+        return request.model_copy(update={"user_notes": [*request.user_notes, context_note]})
+
+    def _recent_conversation_context_note(self, request: SessionRequest, limit: int = 3) -> str:
+        if not request.channel or not request.conversation_id:
+            return ""
+        candidates = [
+            runtime
+            for runtime in self.sessions.values()
+            if runtime.summary.channel == request.channel and runtime.summary.conversation_id == request.conversation_id
+        ]
+        candidates.sort(key=lambda item: item.summary.updated_at, reverse=True)
+        lines: list[str] = []
+        for runtime in candidates[:limit]:
+            summary = runtime.summary
+            detail = runtime.detail
+            parts = [
+                f"session={summary.session_id}",
+                f"state={summary.state.value}",
+                f"verdict={summary.verdict.value if summary.verdict else ''}",
+                f"goal={truncate_text(summary.goal, 180)}",
+            ]
+            if detail.final_outcome:
+                parts.append(f"final={truncate_text(detail.final_outcome, 220)}")
+            elif summary.final_summary:
+                parts.append(f"final={truncate_text(summary.final_summary, 220)}")
+            if detail.next_action:
+                parts.append(f"next={truncate_text(detail.next_action, 220)}")
+            if detail.codex_execution:
+                parts.append(f"codex={truncate_text(detail.codex_execution, 220)}")
+            if detail.user_notes:
+                parts.append(f"user_notes={truncate_text(' | '.join(detail.user_notes[-2:]), 220)}")
+            lines.append("- " + "; ".join(item for item in parts if item))
+        if not lines:
+            return ""
+        return "\n".join(
+            [
+                "[recent conversation context]",
+                "Use this as prior conversation context. The latest user message remains authoritative.",
+                *lines,
+            ]
+        )
+
     def list_sessions(
         self,
         channel: str | None = None,
         conversation_id: str | None = None,
         active_only: bool = False,
+        updated_after: datetime | None = None,
     ) -> list[SessionSummary]:
         summaries = [runtime.summary for runtime in self.sessions.values()]
         if channel:
@@ -666,6 +719,8 @@ class SessionManager:
             summaries = [item for item in summaries if item.conversation_id == conversation_id]
         if active_only:
             summaries = [item for item in summaries if item.state in {SessionState.PLANNING, SessionState.EXECUTING, SessionState.REVIEWING, SessionState.WAITING_USER}]
+        if updated_after:
+            summaries = [item for item in summaries if item.updated_at > updated_after]
         return sorted(summaries, key=lambda item: item.updated_at, reverse=True)
 
     def get_session(self, session_id: str) -> SessionDetail:

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
+from threading import Event
 
 from telecodex.gateway.interfaces import IncomingMessage
 from telecodex.gateway.service import GatewayService
@@ -68,9 +69,11 @@ class FakeWorker:
         self.active_detail.next_action = "Gemini가 첫 번째 Codex 작업 지시를 정리하고 있습니다."
         return SessionCreateResponse(session_id="session-1", state=SessionState.PLANNING, verdict=SessionVerdict.CONTINUE)
 
-    def list_sessions(self, channel=None, conversation_id=None, active_only=False):  # noqa: ANN001
+    def list_sessions(self, channel=None, conversation_id=None, active_only=False, updated_after=None):  # noqa: ANN001
         if active_only:
             return SessionListResponse(sessions=[self.active_detail.summary])
+        if updated_after and self.active_detail.summary.updated_at <= updated_after:
+            return SessionListResponse(sessions=[])
         return SessionListResponse(sessions=[self.active_detail.summary])
 
     def get_session(self, session_id: str) -> SessionDetail:
@@ -94,6 +97,16 @@ class FakeWorker:
                 quota=ProviderQuota(requests_per_minute=15, requests_per_day=1000, tokens_per_minute=250000),
             ),
         )
+
+
+class StoppingChat(FakeChat):
+    def __init__(self, stop_event: Event) -> None:
+        super().__init__()
+        self._stop_event = stop_event
+
+    def poll_messages(self, timeout_sec):  # noqa: ANN001, D401
+        self._stop_event.set()
+        return []
 
 
 def test_gateway_service_rejects_non_text() -> None:
@@ -561,3 +574,22 @@ def test_gateway_service_localizes_known_english_planner_text() -> None:
 
     body = chat.messages[-1][1]
     assert "사용자 목표가 아직 너무 넓어서 바로 진행할 수 없습니다." in body
+
+
+def test_gateway_service_stop_stops_watcher_thread() -> None:
+    worker = FakeWorker()
+    service = GatewayService(
+        cfg=GatewayConfig(
+            telegram_token="token",
+            allowed_user_ids=[1],
+            worker_base_url="http://worker",
+            session_push_interval_sec=1,
+        ),
+        chat=StoppingChat(Event()),
+        worker=worker,
+    )
+    service.start()
+    assert service._watcher_thread is not None
+    service.stop()
+    assert service._watcher_thread is not None
+    assert not service._watcher_thread.is_alive()

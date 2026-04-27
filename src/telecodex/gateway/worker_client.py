@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from telecodex.shared.models import (
     AIStatusResponse,
     CancelResponse,
@@ -44,6 +46,7 @@ class WorkerClient:
         channel: str | None = None,
         conversation_id: str | None = None,
         active_only: bool = False,
+        updated_after: datetime | None = None,
     ) -> SessionListResponse:
         params = {}
         if channel:
@@ -52,6 +55,8 @@ class WorkerClient:
             params["conversation_id"] = conversation_id
         if active_only:
             params["active_only"] = "true"
+        if updated_after:
+            params["updated_after"] = updated_after.isoformat()
         response = self._http().get(
             f"{self.base_url}/sessions",
             headers=self._headers(),
