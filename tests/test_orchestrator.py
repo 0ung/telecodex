@@ -18,7 +18,7 @@ from telecodex.shared.models import (
     GeminiStatus,
     utc_now,
 )
-from telecodex.worker.orchestrator import SessionRuntimeState, WorkerOrchestrator
+from telecodex.worker.orchestrator import SessionManager, SessionRuntimeState, WorkerOrchestrator
 
 
 def _build_runtime(orchestrator: WorkerOrchestrator, request: SessionRequest, session_id: str) -> SessionRuntimeState:
@@ -93,6 +93,7 @@ def test_worker_orchestrator_completes_dry_run(tmp_path) -> None:
     assert result.latest_job.result is not None
     assert result.latest_job.result.final_summary == "The goal is complete."
     assert (tmp_path / ".runs" / "_sessions" / "session-1" / "shared_goal.md").exists()
+    assert orchestrator.store.get_active_session("telegram", "chat-1") == ""
 
 
 def test_worker_orchestrator_waits_for_user_when_gemini_requests_input(tmp_path) -> None:
@@ -320,6 +321,53 @@ def test_worker_orchestrator_replaces_goal_criteria_on_revised_done(tmp_path) ->
     assert result.acceptance_criteria == ["저장소가 프로젝트 디렉터리에 연결되어 있습니다."]
     assert result.completed_acceptance_criteria == result.acceptance_criteria
     assert "취소된 하위 작업" not in " ".join(result.acceptance_criteria)
+
+
+def test_session_manager_does_not_cancel_stale_completed_active_session(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    cfg = WorkerConfig(
+        workspace_root=str(tmp_path),
+        runs_dir=str(tmp_path / ".runs"),
+        dry_run=True,
+    )
+    manager = SessionManager(cfg)
+    monkeypatch.setattr(manager, "_start_background_processing", lambda runtime: None)
+
+    old_request = SessionRequest(
+        goal="완료된 이전 목표",
+        requester_id=1,
+        workspace_path=str(tmp_path),
+        channel="telegram",
+        conversation_id="chat-stale-active",
+    )
+    old_document = manager.orchestrator.store.create_session("old-session", old_request, "gemini-2.5-flash")
+    manager.orchestrator.mcp_service.session_write_gemini_sections(
+        "old-session",
+        final_outcome="이전 목표는 이미 완료되었습니다.",
+        verdict="done",
+        status="completed",
+    )
+    manager.orchestrator.store.set_active_session("telegram", "chat-stale-active", "old-session")
+    old_document = manager.orchestrator.store.load_document("old-session")
+    old_summary = old_document.to_summary(old_request, str(manager.orchestrator.store.shared_goal_path("old-session")))
+    manager.sessions["old-session"] = SessionRuntimeState(
+        summary=old_summary,
+        request=old_request,
+        detail=SessionDetail(summary=old_summary, request=old_request),
+    )
+
+    new_summary = manager.create_session(
+        SessionRequest(
+            goal="새 목표",
+            requester_id=1,
+            workspace_path=str(tmp_path),
+            channel="telegram",
+            conversation_id="chat-stale-active",
+        )
+    )
+
+    assert manager.sessions["old-session"].summary.state == SessionState.COMPLETED
+    assert manager.orchestrator.store.load_document("old-session").status == SessionState.COMPLETED
+    assert manager.orchestrator.store.get_active_session("telegram", "chat-stale-active") == new_summary.session_id
 
 
 def test_worker_orchestrator_logs_runtime_errors(tmp_path, monkeypatch, caplog) -> None:  # noqa: ANN001
