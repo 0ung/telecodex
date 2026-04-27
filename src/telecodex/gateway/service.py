@@ -98,15 +98,6 @@ class GatewayService:
     ) -> None:
         active = self._active_session(channel, conversation_id)
         if active is None:
-            if not attachments and self._is_placeholder_message_without_goal(text):
-                self.chat.send_message(conversation_id, "좋아요. 질문이나 요청을 한 문장으로 보내주세요.")
-                return
-            self._run_command(channel, conversation_id, user_id, text, attachments=attachments)
-            return
-        if not attachments and self._is_status_like_message(text):
-            self._status_command(channel, conversation_id)
-            return
-        if self._should_start_new_session_from_active(active, text, attachments):
             self._run_command(channel, conversation_id, user_id, text, attachments=attachments)
             return
         self.worker.continue_session(active.summary.session_id, SessionContinueRequest(text=text, attachments=attachments))
@@ -363,132 +354,6 @@ class GatewayService:
     def _message_digest(text: str) -> str:
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
-    @staticmethod
-    def _is_placeholder_message_without_goal(text: str) -> bool:
-        normalized = text.strip().casefold()
-        if not normalized:
-            return True
-        placeholders = {
-            "다시 질문할게",
-            "다시 물어볼게",
-            "질문할게",
-            "잠깐만",
-            "잠시만",
-            "잠만",
-            "다시",
-            "다시요",
-        }
-        return normalized in placeholders
-
-    @staticmethod
-    def _is_status_like_message(text: str) -> bool:
-        normalized = text.strip().casefold()
-        status_messages = {
-            "끝이야",
-            "끝이야?",
-            "안해",
-            "안해?",
-            "하고 있어",
-            "하고 있어?",
-            "됐어",
-            "됐어?",
-            "완료됐어",
-            "완료됐어?",
-            "완료야",
-            "완료야?",
-            "진행중",
-            "진행중?",
-            "진행중이야",
-            "진행중이야?",
-            "어디까지 됐어",
-            "어디까지 됐어?",
-            "진행됐어",
-            "진행됐어?",
-            "작업중",
-            "작업중?",
-            "작업중이야",
-            "작업중이야?",
-        }
-        return normalized in status_messages
-
-    @staticmethod
-    def _should_start_new_session_from_active(
-        active: SessionDetail,
-        text: str,
-        attachments: list[JobAttachment],
-    ) -> bool:
-        if attachments:
-            return False
-        if active.summary.state not in {SessionState.PLANNING, SessionState.REVIEWING, SessionState.WAITING_USER}:
-            return False
-
-        normalized = text.strip().casefold()
-        if not normalized or GatewayService._is_placeholder_message_without_goal(text):
-            return False
-
-        if GatewayService._looks_like_goal_redirect(normalized):
-            return True
-
-        strong_new_goal_tokens = [
-            "gemini",
-            "codex",
-            "mcp",
-            "ai status",
-            "github",
-            "gitflow",
-            "git flow",
-            "깃허브",
-            "깃플로우",
-            "브랜치 보호",
-            "부산 관광",
-            "뭘 할 수",
-            "무엇을 할 수",
-            "뭐가 문제",
-            "문제지",
-            "설명해",
-            "설명해줘",
-            "알려줘",
-            "what can",
-            "what is",
-            "why",
-            "how",
-            "issue",
-            "problem",
-        ]
-        if any(token in normalized for token in strong_new_goal_tokens):
-            return True
-
-        return False
-
-    @staticmethod
-    def _looks_like_goal_redirect(normalized: str) -> bool:
-        redirect_markers = [
-            "아니야",
-            "아님",
-            "그게 아니라",
-            "이제 ",
-            "자 ",
-            "다시 ",
-            "새로 ",
-        ]
-        if not any(normalized.startswith(marker) for marker in redirect_markers):
-            return False
-        goal_markers = [
-            "사이트",
-            "프로젝트",
-            "깃허브",
-            "github",
-            "브랜치",
-            "배포",
-            "세팅",
-            "설정",
-            "연결",
-            "개발",
-            "수정",
-            "전략",
-        ]
-        return any(marker in normalized for marker in goal_markers)
-
     def _session_detail_or_none(self, session_id: str) -> SessionDetail | None:
         try:
             return self.worker.get_session(session_id)
@@ -555,7 +420,9 @@ class GatewayService:
             for item in detail.acceptance_criteria[:5]:
                 marker = "x" if item in detail.completed_acceptance_criteria else " "
                 lines.append(f"- [{marker}] {GatewayService._compact_text(item, limit=260)}")
-        dialogue_lines = GatewayService._recent_dialogue_lines(detail, max_turns=2)
+        dialogue_lines = []
+        if detail.summary.state not in {SessionState.COMPLETED, SessionState.CANCELED}:
+            dialogue_lines = GatewayService._recent_dialogue_lines(detail, max_turns=2)
         if dialogue_lines:
             lines.append("")
             lines.append("최근 대화")
@@ -627,8 +494,12 @@ class GatewayService:
         latest_turn = detail.turns[-1] if detail.turns else None
         if detail.final_outcome:
             GatewayService._append_unique_summary(lines, seen, "결과", detail.final_outcome)
+            if detail.summary.state in {SessionState.COMPLETED, SessionState.CANCELED}:
+                return lines
         error_candidate = (detail.error or (detail.latest_job.error if detail.latest_job else "")).strip()
         GatewayService._append_unique_summary(lines, seen, "오류", error_candidate)
+        if detail.summary.state == SessionState.FAILED and lines:
+            return lines
         gemini_candidate = GatewayService._pick_summary(
             latest_turn.gemini.summary_for_user if latest_turn else "",
             detail.gemini_review,
@@ -683,7 +554,7 @@ class GatewayService:
     @staticmethod
     def _append_unique_summary(lines: list[str], seen: set[str], label: str, value: str) -> None:
         compact = GatewayService._compact_text(value, limit=360)
-        if not compact or GatewayService._is_internal_display_text(compact):
+        if not compact:
             return
         key = compact.casefold()
         if key in seen:
@@ -714,14 +585,10 @@ class GatewayService:
             cleaned = raw_line.strip()
             if not cleaned or cleaned == "_None_":
                 continue
-            if GatewayService._is_internal_display_text(cleaned):
-                continue
             if cleaned.startswith("- "):
                 cleaned = cleaned[2:].strip()
             elif cleaned.startswith("* "):
                 cleaned = cleaned[2:].strip()
-            if GatewayService._is_internal_display_text(cleaned):
-                continue
             items.append(cleaned)
         if not items:
             return []
@@ -740,12 +607,12 @@ class GatewayService:
         if payload is None:
             extracted = GatewayService._extract_display_field_from_jsonish_text(stripped)
             if extracted:
-                return GatewayService._localize_known_english_text(extracted)
+                return extracted
             if GatewayService._looks_like_structured_payload(stripped):
                 return ""
-            return GatewayService._localize_known_english_text(stripped)
+            return stripped
         extracted = GatewayService._extract_display_text_from_payload(payload)
-        return GatewayService._localize_known_english_text(extracted or stripped)
+        return extracted or stripped
 
     @staticmethod
     def _extract_display_text_from_payload(payload: object) -> str:
@@ -763,7 +630,7 @@ class GatewayService:
                     return nested
             return ""
         if isinstance(payload, str):
-            return GatewayService._localize_known_english_text(payload.strip())
+            return payload.strip()
         return ""
 
     @staticmethod
@@ -837,32 +704,6 @@ class GatewayService:
             or '"instruction_for_codex"' in normalized
             or '"acceptance_criteria"' in normalized
         )
-
-    @staticmethod
-    def _is_internal_display_text(text: str) -> bool:
-        normalized = text.casefold()
-        internal_markers = [
-            '"instruction_for_codex"',
-            "instruction_for_codex",
-            '"acceptance_criteria"',
-            '"completed_acceptance_criteria"',
-            "codebase_investigator",
-            "print(",
-        ]
-        return any(marker in normalized for marker in internal_markers)
-
-    @staticmethod
-    def _localize_known_english_text(text: str) -> str:
-        normalized = " ".join(text.strip().split())
-        replacements = {
-            "The user's goal is too general to proceed. I need to ask for more specific details about the development task they wish to undertake.": (
-                "사용자 목표가 아직 너무 넓어서 바로 진행할 수 없습니다. 어떤 개발 작업을 할지 조금 더 구체적인 설명이 필요합니다."
-            ),
-            "User indicated they want to ask again and provided no new specific goal.": (
-                "사용자가 다시 질문하겠다고 했지만 아직 구체적인 요청은 주지 않았습니다."
-            ),
-        }
-        return replacements.get(normalized, text.strip())
 
     @staticmethod
     def _state_label(state: SessionState) -> str:

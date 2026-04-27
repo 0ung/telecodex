@@ -187,10 +187,7 @@ class WorkerOrchestrator:
                         )
                     )
                     completed_criteria = []
-                    resolved_criteria = merge_unique_items(
-                        gemini_resp.acceptance_criteria,
-                        derive_acceptance_criteria(revised_goal),
-                    )
+                    resolved_criteria = self._criteria_for_revised_goal(revised_goal, gemini_resp.acceptance_criteria)
                 else:
                     resolved_criteria = merge_unique_items(
                         state.detail.acceptance_criteria,
@@ -204,6 +201,7 @@ class WorkerOrchestrator:
                     completed_criteria,
                     gemini_resp.completed_acceptance_criteria,
                 )
+                completed_criteria = self._filter_completed_criteria(completed_criteria, resolved_criteria)
                 verdict = resolve_session_verdict(gemini_resp)
                 gemini_plan = gemini_resp.gemini_plan.strip() or gemini_resp.summary_for_user.strip()
                 gemini_review = gemini_resp.review_notes.strip() or gemini_resp.reason.strip() or gemini_resp.summary_for_user.strip()
@@ -224,12 +222,15 @@ class WorkerOrchestrator:
                 self._audit(state, "gemini", f"turn {global_turn} completed with verdict={verdict.value}")
 
                 if verdict == SessionVerdict.DONE:
+                    completed_criteria = self._completed_criteria_for_done(resolved_criteria, completed_criteria)
                     final_status = FinalStatus.DONE
                     final_reason = gemini_resp.reason.strip() or "gemini marked the goal complete"
                     final_summary = gemini_resp.summary_for_user.strip() or next_action
                     self.mcp_service.session_write_gemini_sections(
                         session_id=session_id,
                         final_outcome=final_summary,
+                        acceptance_criteria=resolved_criteria,
+                        completed_acceptance_criteria=completed_criteria,
                         verdict=SessionVerdict.DONE.value,
                         status=SessionState.COMPLETED.value,
                     )
@@ -304,16 +305,21 @@ class WorkerOrchestrator:
                 store.save_codex(local_turn, codex_exchange)
                 self._audit(state, "codex", f"turn {global_turn} completed with status={codex_resp.status.value}")
 
+                codex_completed_criteria = self._filter_completed_criteria(
+                    codex_resp.verified_acceptance_criteria,
+                    state.detail.acceptance_criteria,
+                )
                 completed_criteria = merge_unique_items(
                     completed_criteria,
-                    codex_resp.verified_acceptance_criteria,
+                    codex_completed_criteria,
                 )
+                completed_criteria = self._filter_completed_criteria(completed_criteria, state.detail.acceptance_criteria)
                 self.mcp_service.session_write_codex_sections(
                     session_id=session_id,
                     codex_plan=codex_resp.codex_plan.strip() or instruction,
                     codex_execution=self._format_codex_execution(codex_resp),
                     codex_verification=self._format_codex_verification(codex_resp),
-                    completed_acceptance_criteria=codex_resp.verified_acceptance_criteria,
+                    completed_acceptance_criteria=codex_completed_criteria,
                 )
 
                 if codex_resp.status == CodexStatus.FAILED:
@@ -533,6 +539,35 @@ class WorkerOrchestrator:
             if allow and prefix not in allow:
                 raise RuntimeError(f"command '{prefix}' is not allowed by execution policy")
         return commands
+
+    @staticmethod
+    def _criteria_for_revised_goal(revised_goal: str, gemini_criteria: list[str]) -> list[str]:
+        criteria = merge_unique_items(gemini_criteria)
+        if criteria:
+            return criteria
+        return derive_acceptance_criteria(revised_goal)
+
+    @staticmethod
+    def _filter_completed_criteria(completed: list[str], acceptance_criteria: list[str]) -> list[str]:
+        if not acceptance_criteria:
+            return merge_unique_items(completed)
+        accepted_by_key = {item.casefold(): item for item in acceptance_criteria}
+        filtered: list[str] = []
+        seen: set[str] = set()
+        for item in completed:
+            key = item.strip().casefold()
+            if not key or key in seen or key not in accepted_by_key:
+                continue
+            seen.add(key)
+            filtered.append(accepted_by_key[key])
+        return filtered
+
+    @classmethod
+    def _completed_criteria_for_done(cls, acceptance_criteria: list[str], completed: list[str]) -> list[str]:
+        filtered = cls._filter_completed_criteria(completed, acceptance_criteria)
+        if not acceptance_criteria:
+            return filtered
+        return merge_unique_items(filtered, acceptance_criteria)
 
     @staticmethod
     def _gemini_system_prompt() -> str:
