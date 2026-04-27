@@ -40,6 +40,41 @@ normalize_runtime_config_permissions() {
   fi
 }
 
+migrate_worker_execution_policy() {
+  if [[ "$ROLE" != "worker" || ! -f "$CONFIG_PATH" ]]; then
+    return 0
+  fi
+
+  sudo CONFIG_PATH="$CONFIG_PATH" "$VENV_PATH/bin/python" <<'PY'
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+import yaml
+
+config_path = Path(os.environ["CONFIG_PATH"])
+payload = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
+if not isinstance(payload, dict):
+    raise SystemExit(0)
+
+policy = payload.get("execution_policy")
+if not isinstance(policy, dict):
+    policy = {}
+
+allow_commands = policy.get("allow_commands")
+legacy_restrictive_allowlist = {"git", "python", "pytest"}
+if isinstance(allow_commands, list) and set(map(str, allow_commands)) <= legacy_restrictive_allowlist:
+    # Older single-node installs generated an allowlist that blocked normal development commands
+    # such as mkdir, ls, npm, and shell helpers. Migrate only that known restrictive default; leave
+    # deliberate custom allowlists untouched.
+    policy["allow_commands"] = []
+    policy.setdefault("deny_commands", ["rm", "del"])
+    payload["execution_policy"] = policy
+    config_path.write_text(yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+PY
+}
+
 wait_for_worker_health() {
   local token="$1"
   local attempts="${2:-15}"
@@ -86,6 +121,7 @@ sudo mv -Tf "$NEXT_LINK" "$CURRENT_PATH"
 sudo chown -h "$APP_USER:$APP_GROUP" "$CURRENT_PATH"
 
 sudo -u "$APP_USER" -H "$VENV_PATH/bin/python" -m pip install --disable-pip-version-check -e "$CURRENT_PATH"
+migrate_worker_execution_policy
 normalize_runtime_config_permissions
 
 sudo systemctl restart "$SERVICE_NAME"
