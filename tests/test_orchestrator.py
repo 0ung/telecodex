@@ -323,6 +323,62 @@ def test_worker_orchestrator_replaces_goal_criteria_on_revised_done(tmp_path) ->
     assert "취소된 하위 작업" not in " ".join(result.acceptance_criteria)
 
 
+def test_worker_orchestrator_sends_latest_user_input_to_gemini(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    cfg = WorkerConfig(
+        workspace_root=str(tmp_path),
+        runs_dir=str(tmp_path / ".runs"),
+        dry_run=False,
+        gemini=AdapterConfig(protocol="gemini_cli", command="gemini", model="gemini-2.5-flash"),
+        codex=AdapterConfig(protocol="codex_app_server", command="codex"),
+        execution_policy=ExecutionPolicy(),
+    )
+    orchestrator = WorkerOrchestrator(cfg)
+    seen_latest_inputs: list[str] = []
+
+    def fake_execute(payload, response_type):  # noqa: ANN001
+        now = utc_now()
+        request_payload = GeminiRequest.model_validate(payload)
+        seen_latest_inputs.append(request_payload.latest_user_input)
+        result = GeminiResponse(
+            status=GeminiStatus.DONE,
+            verdict="done",
+            revised_goal="프로젝트 루트에 BusanTour 폴더를 생성합니다.",
+            summary_for_user="BusanTour 폴더 생성을 완료 처리합니다.",
+            acceptance_criteria=["프로젝트 루트에 BusanTour 폴더가 준비됩니다."],
+            completed_acceptance_criteria=["프로젝트 루트에 BusanTour 폴더가 준비됩니다."],
+        )
+        exchange = AdapterExchange(
+            request_json="{}",
+            response_json=result.model_dump_json(indent=2),
+            execution=CommandExecution(
+                command="gemini",
+                args=[],
+                stdout="{}",
+                stderr="",
+                exit_code=0,
+                started_at=now,
+                finished_at=now,
+            ),
+        )
+        return result, exchange
+
+    monkeypatch.setattr(orchestrator.runtime.gemini, "execute", fake_execute)
+
+    request = SessionRequest(
+        goal="새로운 폴더를 만들어서 개발을 시작합니다.",
+        requester_id=1,
+        workspace_path=str(tmp_path),
+        channel="telegram",
+        conversation_id="chat-latest-input",
+        user_notes=["BusanTour", "BusanTour\n프로젝트 루트로 빼줘"],
+    )
+    runtime = _build_runtime(orchestrator, request, "session-latest-input")
+
+    orchestrator.process_session(runtime)
+
+    assert seen_latest_inputs == ["BusanTour\n프로젝트 루트로 빼줘"]
+
+
 def test_session_manager_does_not_cancel_stale_completed_active_session(tmp_path, monkeypatch) -> None:  # noqa: ANN001
     cfg = WorkerConfig(
         workspace_root=str(tmp_path),
