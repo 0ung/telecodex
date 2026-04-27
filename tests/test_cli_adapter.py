@@ -64,6 +64,38 @@ def test_gemini_cli_adapter_extracts_dict_response_payload() -> None:
     assert parsed.summary_for_user == "dictionary payload"
 
 
+def test_gemini_cli_adapter_extracts_bulletized_json_payload() -> None:
+    adapter = JsonCliAdapter(
+        "gemini",
+        AdapterConfig(protocol="gemini_cli", command="gemini", model="gemini-2.5-flash"),
+        dry_run=False,
+    )
+    stdout = json.dumps(
+        {
+            "session_id": "s1",
+            "response": """
+{
+- "status": "continue",
+- "summary_for_user": "부산 관광사이트의 GitHub 설정을 진행합니다.",
+- "instruction_for_codex": "print(codebase_investigator.investigate(objective='secret'))",
+- "acceptance_criteria": [
+- "Gitflow 전략을 적용한다."
+- ],
+- "reason": "test"
+}
+""",
+            "stats": {},
+        }
+    )
+
+    response_json = adapter._extract_response_json(stdout)  # noqa: SLF001
+    parsed = GeminiResponse.model_validate(json.loads(response_json))
+
+    assert parsed.status.value == "continue"
+    assert parsed.summary_for_user == "부산 관광사이트의 GitHub 설정을 진행합니다."
+    assert "codebase_investigator" in parsed.instruction_for_codex
+
+
 def test_gemini_cli_adapter_falls_back_from_plain_text_response() -> None:
     adapter = JsonCliAdapter(
         "gemini",
