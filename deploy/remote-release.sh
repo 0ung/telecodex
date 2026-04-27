@@ -13,6 +13,32 @@ RELEASES_DIR="${RELEASES_DIR:-$APP_ROOT/releases}"
 CURRENT_PATH="${CURRENT_PATH:-$APP_ROOT/current}"
 KEEP_RELEASES="${KEEP_RELEASES:-5}"
 SERVICE_NAME="${SERVICE_NAME:-telecodex-$ROLE}"
+CONFIG_DIR="${CONFIG_DIR:-/etc/telecodex}"
+
+config_paths_for_role() {
+  case "$ROLE" in
+    gateway)
+      CONFIG_PATH="$CONFIG_DIR/gateway.yaml"
+      ENV_PATH="$CONFIG_DIR/gateway.env"
+      ;;
+    worker)
+      CONFIG_PATH="$CONFIG_DIR/worker.yaml"
+      ENV_PATH="$CONFIG_DIR/worker.env"
+      ;;
+  esac
+}
+
+normalize_runtime_config_permissions() {
+  if [[ -f "$CONFIG_PATH" ]]; then
+    sudo chown "root:$APP_GROUP" "$CONFIG_PATH"
+    sudo chmod 640 "$CONFIG_PATH"
+  fi
+
+  if [[ -f "$ENV_PATH" ]]; then
+    sudo chown root:root "$ENV_PATH"
+    sudo chmod 600 "$ENV_PATH"
+  fi
+}
 
 wait_for_worker_health() {
   local token="$1"
@@ -38,6 +64,8 @@ if [[ ! -f "$ARCHIVE_PATH" ]]; then
   exit 1
 fi
 
+config_paths_for_role
+
 TARGET_RELEASE="$RELEASES_DIR/$RELEASE_ID"
 NEXT_LINK="$APP_ROOT/current.next"
 
@@ -58,6 +86,7 @@ sudo mv -Tf "$NEXT_LINK" "$CURRENT_PATH"
 sudo chown -h "$APP_USER:$APP_GROUP" "$CURRENT_PATH"
 
 sudo -u "$APP_USER" -H "$VENV_PATH/bin/python" -m pip install --disable-pip-version-check -e "$CURRENT_PATH"
+normalize_runtime_config_permissions
 
 sudo systemctl restart "$SERVICE_NAME"
 sudo systemctl is-active --quiet "$SERVICE_NAME"
