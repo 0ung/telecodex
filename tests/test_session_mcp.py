@@ -63,3 +63,28 @@ def test_session_mcp_server_reads_and_updates_shared_goal(tmp_path) -> None:
         assert "Implemented the feature and ran pytest." in markdown
     finally:
         server.stop()
+
+
+def test_session_mcp_clears_stale_question_when_user_answers(tmp_path) -> None:
+    store = SessionDocumentStore(str(tmp_path))
+    request = SessionRequest(
+        goal="새 개발 폴더를 만든다",
+        requester_id=1,
+        workspace_path=str(tmp_path),
+        channel="telegram",
+        conversation_id="chat-1",
+    )
+    store.create_session("session-1", request, "gemini-2.5-flash")
+    service = SessionMcpService(store)
+
+    service.session_write_gemini_sections(
+        "session-1",
+        next_action="새로운 개발 폴더의 이름을 무엇으로 하시겠습니까?",
+        verdict=SessionVerdict.ASK_USER.value,
+        status=SessionState.WAITING_USER.value,
+    )
+    service.session_update_user_input("session-1", text="BusanTour")
+
+    loaded = service.session_read("session-1")
+    assert loaded["sections"]["next_action"] == ""
+    assert any("BusanTour" in item for item in loaded["sections"]["user_notes"])

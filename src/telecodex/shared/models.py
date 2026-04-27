@@ -113,6 +113,7 @@ class GeminiRequest(BaseModel):
     current_summary: str = ""
     acceptance_criteria: list[str] = Field(default_factory=list)
     user_notes: list[str] = Field(default_factory=list)
+    latest_user_input: str = ""
     shared_goal_path: str = ""
     latest_codex_result: "CodexResult" = Field(default_factory=lambda: CodexResult())
     remaining_turns: int
@@ -126,6 +127,7 @@ class GeminiRequest(BaseModel):
         compact.current_summary = truncate_text(compact.current_summary, 800)
         compact.acceptance_criteria = [truncate_text(item, 200) for item in compact.acceptance_criteria[:8]]
         compact.user_notes = [truncate_text(item, 200) for item in compact.user_notes[-8:]]
+        compact.latest_user_input = truncate_text(compact.latest_user_input, 400)
         compact.latest_codex_result = compact.latest_codex_result.compact_for_gemini()
         return compact
 
