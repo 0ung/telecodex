@@ -103,11 +103,17 @@ class GatewayService:
         self.worker.continue_session(active.summary.session_id, SessionContinueRequest(text=text, attachments=attachments))
         detail = self._session_detail_or_none(active.summary.session_id) or active
         if active.summary.state == SessionState.WAITING_USER:
-            body = self._format_session_brief(detail, f"`{active.summary.session_id}` 세션에 최신 입력을 반영했습니다.")
+            body = self._format_input_ack(
+                active.summary.session_id,
+                "최신 입력을 반영했습니다. 이어서 처리 중입니다.",
+            )
             self.chat.send_message(conversation_id, body)
             self._remember_session_snapshot(detail)
             return
-        body = self._format_session_brief(detail, f"`{active.summary.session_id}` 세션에 메모를 추가했습니다.")
+        body = self._format_input_ack(
+            active.summary.session_id,
+            "메모를 추가했습니다. 다음 검토 턴에 반영하겠습니다.",
+        )
         self.chat.send_message(conversation_id, body)
         self._remember_session_snapshot(detail)
 
@@ -351,6 +357,15 @@ class GatewayService:
         return GatewayService._format_session_brief(detail, title)
 
     @staticmethod
+    def _format_input_ack(session_id: str, message: str) -> str:
+        return "\n".join(
+            [
+                f"`{session_id}` 세션에 입력을 받았습니다.",
+                message,
+            ]
+        )
+
+    @staticmethod
     def _message_digest(text: str) -> str:
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
@@ -377,6 +392,7 @@ class GatewayService:
 
     @staticmethod
     def _format_session_brief(detail: SessionDetail, title: str) -> str:
+        focus_lines = GatewayService._focus_lines(detail)
         lines = [
             title,
             f"상태: {GatewayService._state_label(detail.summary.state)}",
@@ -386,12 +402,11 @@ class GatewayService:
         progress_line = GatewayService._progress_line(detail)
         if progress_line:
             lines.append(progress_line)
-        summary_lines = GatewayService._summary_lines(detail)
+        summary_lines = GatewayService._summary_lines(detail, exclude_texts=focus_lines)
         if summary_lines:
             lines.append("")
             lines.append("진행 요약")
             lines.extend(summary_lines)
-        focus_lines = GatewayService._focus_lines(detail)
         if focus_lines:
             lines.append("")
             lines.append(GatewayService._focus_heading(detail))
@@ -400,6 +415,7 @@ class GatewayService:
 
     @staticmethod
     def _format_session_status(detail: SessionDetail) -> str:
+        focus_lines = GatewayService._focus_lines(detail)
         lines = [
             f"최근 세션 `{detail.summary.session_id}`",
             f"상태: {GatewayService._state_label(detail.summary.state)}",
@@ -409,7 +425,7 @@ class GatewayService:
         progress_line = GatewayService._progress_line(detail)
         if progress_line:
             lines.append(progress_line)
-        summary_lines = GatewayService._summary_lines(detail)
+        summary_lines = GatewayService._summary_lines(detail, exclude_texts=focus_lines)
         if summary_lines:
             lines.append("")
             lines.append("진행 요약")
@@ -427,7 +443,6 @@ class GatewayService:
             lines.append("")
             lines.append("최근 대화")
             lines.extend(dialogue_lines)
-        focus_lines = GatewayService._focus_lines(detail)
         if focus_lines:
             lines.append("")
             lines.append(GatewayService._focus_heading(detail))
@@ -436,6 +451,7 @@ class GatewayService:
 
     @staticmethod
     def _format_session_detail(detail: SessionDetail) -> str:
+        focus_lines = GatewayService._focus_lines(detail)
         lines = [
             f"세션 `{detail.summary.session_id}`",
             f"상태: {GatewayService._state_label(detail.summary.state)}",
@@ -447,7 +463,7 @@ class GatewayService:
             lines.append(progress_line)
         if detail.request.attachments:
             lines.append(f"첨부: {len(detail.request.attachments)}개")
-        summary_lines = GatewayService._summary_lines(detail)
+        summary_lines = GatewayService._summary_lines(detail, exclude_texts=focus_lines)
         if summary_lines:
             lines.append("")
             lines.append("진행 요약")
@@ -463,7 +479,6 @@ class GatewayService:
             lines.append("")
             lines.append("대화 기록")
             lines.extend(dialogue_lines)
-        focus_lines = GatewayService._focus_lines(detail)
         if focus_lines:
             lines.append("")
             lines.append(GatewayService._focus_heading(detail))
@@ -488,9 +503,9 @@ class GatewayService:
         return lines
 
     @staticmethod
-    def _summary_lines(detail: SessionDetail) -> list[str]:
+    def _summary_lines(detail: SessionDetail, exclude_texts: list[str] | None = None) -> list[str]:
         lines: list[str] = []
-        seen: set[str] = set()
+        seen = {GatewayService._summary_key(item) for item in (exclude_texts or []) if item.strip()}
         latest_turn = detail.turns[-1] if detail.turns else None
         if detail.final_outcome:
             GatewayService._append_unique_summary(lines, seen, "결과", detail.final_outcome)
@@ -526,6 +541,8 @@ class GatewayService:
 
     @staticmethod
     def _focus_lines(detail: SessionDetail) -> list[str]:
+        if detail.summary.state.is_terminal:
+            return []
         if detail.summary.state == SessionState.WAITING_USER:
             request_text = detail.next_action or detail.gemini_review or detail.gemini_plan
             if request_text:
@@ -556,11 +573,15 @@ class GatewayService:
         compact = GatewayService._compact_text(value, limit=360)
         if not compact:
             return
-        key = compact.casefold()
+        key = GatewayService._summary_key(compact)
         if key in seen:
             return
         seen.add(key)
         lines.append(f"- {label}: {compact}")
+
+    @staticmethod
+    def _summary_key(text: str) -> str:
+        return " ".join(text.casefold().split())
 
     @staticmethod
     def _latest_block(text: str) -> str:

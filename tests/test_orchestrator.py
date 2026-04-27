@@ -93,6 +93,7 @@ def test_worker_orchestrator_completes_dry_run(tmp_path) -> None:
     assert result.latest_job.result is not None
     assert result.latest_job.result.final_summary == "The goal is complete."
     assert (tmp_path / ".runs" / "_sessions" / "session-1" / "shared_goal.md").exists()
+    assert orchestrator.store.get_active_session("telegram", "chat-1") == ""
 
 
 def test_worker_orchestrator_waits_for_user_when_gemini_requests_input(tmp_path) -> None:
