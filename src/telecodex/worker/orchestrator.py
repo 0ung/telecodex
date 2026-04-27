@@ -140,7 +140,6 @@ class WorkerOrchestrator:
         final_reason = ""
         final_summary = ""
         completed_criteria = list(state.detail.completed_acceptance_criteria)
-
         try:
             for local_turn in range(1, self.cfg.max_turns + 1):
                 global_turn = len(state.detail.turns) + 1
@@ -157,6 +156,7 @@ class WorkerOrchestrator:
                     status=gemini_state.value,
                     active_run_id=run_id,
                 )
+                latest_user_input = state.request.user_notes[-1] if state.request.user_notes else ""
                 gemini_resp, gemini_exchange = self.runtime.gemini.execute(
                     GeminiRequest(
                         session_id=session_id,
@@ -164,6 +164,7 @@ class WorkerOrchestrator:
                         current_summary=rolling.current_summary,
                         acceptance_criteria=list(state.detail.acceptance_criteria),
                         user_notes=list(state.request.user_notes),
+                        latest_user_input=latest_user_input,
                         shared_goal_path=str(self.store.shared_goal_path(session_id)),
                         latest_codex_result=latest_codex,
                         remaining_turns=self.cfg.max_turns - local_turn + 1,
@@ -585,6 +586,10 @@ class WorkerOrchestrator:
             "Codex, or MCP can do, answer it directly in the user's language and prefer a final response instead of "
             "sending Codex to code. In this system, MCP is the structured tool bridge used to read and update shared "
             "session state such as shared_goal.md, so do not describe MCP as unknown or unconfirmed. "
+            "Treat latest_user_input as the user's newest answer to your previous question. Do not ask again for "
+            "information that appears in latest_user_input or user_notes; merge partial answers across turns. "
+            "When a user provides a concrete value such as a folder name or path, proceed with that value and use the "
+            "workspace root as the default location unless the request explicitly says otherwise. "
             "If you need user input, ask only for the minimum missing information required for the next step, and format "
             "question_for_user so the gateway can show it as a short introduction followed by concise bullet-ready items. "
             "Return exactly one verdict: continue, done, ask_user, or fail. Only use ask_user when Codex truly cannot "

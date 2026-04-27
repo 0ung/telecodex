@@ -10,10 +10,9 @@ dry_run: false
 print_io: false
 worker_token: ""
 execution_policy:
-  allow_commands:
-    - git
-    - python
-    - pytest
+  # Empty allow list means Codex can use normal development commands.
+  # Keep destructive commands in deny_commands instead of trying to enumerate every safe tool.
+  allow_commands: []
   deny_commands:
     - rm
     - del

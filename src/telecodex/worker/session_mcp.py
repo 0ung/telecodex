@@ -73,8 +73,10 @@ class SessionMcpService:
             timestamp = document.updated_at or ""
             document.user_notes.append(f"{timestamp} {cleaned}".strip())
             request.user_notes = list(document.user_notes)
+            document.next_action = ""
         if attachments:
             request.attachments.extend(JobAttachment.model_validate(item) for item in attachments)
+            document.next_action = ""
         self.store.save_request(session_id, request)
         self.store.save_document(document, request)
         return self.session_read(session_id)
