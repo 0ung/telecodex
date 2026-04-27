@@ -555,7 +555,9 @@ class GatewayService:
             for item in detail.acceptance_criteria[:5]:
                 marker = "x" if item in detail.completed_acceptance_criteria else " "
                 lines.append(f"- [{marker}] {GatewayService._compact_text(item, limit=260)}")
-        dialogue_lines = GatewayService._recent_dialogue_lines(detail, max_turns=2)
+        dialogue_lines = []
+        if detail.summary.state not in {SessionState.COMPLETED, SessionState.CANCELED}:
+            dialogue_lines = GatewayService._recent_dialogue_lines(detail, max_turns=2)
         if dialogue_lines:
             lines.append("")
             lines.append("최근 대화")
@@ -627,8 +629,12 @@ class GatewayService:
         latest_turn = detail.turns[-1] if detail.turns else None
         if detail.final_outcome:
             GatewayService._append_unique_summary(lines, seen, "결과", detail.final_outcome)
+            if detail.summary.state in {SessionState.COMPLETED, SessionState.CANCELED}:
+                return lines
         error_candidate = (detail.error or (detail.latest_job.error if detail.latest_job else "")).strip()
         GatewayService._append_unique_summary(lines, seen, "오류", error_candidate)
+        if detail.summary.state == SessionState.FAILED and lines:
+            return lines
         gemini_candidate = GatewayService._pick_summary(
             latest_turn.gemini.summary_for_user if latest_turn else "",
             detail.gemini_review,

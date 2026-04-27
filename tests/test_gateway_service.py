@@ -494,6 +494,36 @@ def test_gateway_service_strips_raw_json_from_summary() -> None:
     assert '"status"' not in body
 
 
+def test_gateway_service_completed_status_hides_stale_turn_details() -> None:
+    chat = FakeChat()
+    worker = FakeWorker()
+    worker.active_detail.summary.state = SessionState.COMPLETED
+    worker.active_detail.summary.verdict = SessionVerdict.DONE
+    worker.active_detail.summary.goal = "BusanConnect 저장소를 프로젝트에 연결합니다."
+    worker.active_detail.acceptance_criteria = ["BusanConnect 저장소가 clone되어 있습니다."]
+    worker.active_detail.completed_acceptance_criteria = ["BusanConnect 저장소가 clone되어 있습니다."]
+    worker.active_detail.final_outcome = "Python 설치는 제외했고, BusanConnect 저장소 연결만 완료했습니다."
+    worker.active_detail.gemini_plan = "파이썬 설치를 진행하고 저장소를 복제하겠습니다."
+    worker.active_detail.codex_execution = "sudo apt-get install python3는 실행 정책 때문에 실행하지 않았습니다."
+    worker.active_detail.next_action = "세션 목표가 완료되었습니다."
+    service = GatewayService(
+        cfg=GatewayConfig(
+            telegram_token="token",
+            allowed_user_ids=[1],
+            worker_base_url="http://worker",
+        ),
+        chat=chat,
+        worker=worker,
+    )
+
+    service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text="/status"))
+
+    body = chat.messages[-1][1]
+    assert "Python 설치는 제외했고, BusanConnect 저장소 연결만 완료했습니다." in body
+    assert "sudo apt-get" not in body
+    assert "최근 대화" not in body
+
+
 def test_gateway_service_routes_status_like_message_to_status() -> None:
     chat = FakeChat()
     worker = FakeWorker()
