@@ -532,6 +532,26 @@ def test_gateway_service_routes_progress_nudge_to_status() -> None:
     assert "최근 세션" in chat.messages[-1][1]
 
 
+def test_gateway_service_routes_development_availability_question_to_status() -> None:
+    chat = FakeChat()
+    worker = FakeWorker()
+    service = GatewayService(
+        cfg=GatewayConfig(
+            telegram_token="token",
+            allowed_user_ids=[1],
+            worker_base_url="http://worker",
+        ),
+        chat=chat,
+        worker=worker,
+    )
+
+    service._handle_message(IncomingMessage(channel="telegram", conversation_id="10", sender_id=1, text="지금 개발 가능할까?"))
+
+    assert worker.continue_requests == []
+    assert worker.created_requests == []
+    assert "최근 세션" in chat.messages[-1][1]
+
+
 def test_gateway_service_starts_new_session_for_korean_goal_redirect() -> None:
     chat = FakeChat()
     worker = FakeWorker()

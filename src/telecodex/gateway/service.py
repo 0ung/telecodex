@@ -5,6 +5,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
+from enum import Enum
 from threading import Event, Lock, Thread
 
 from telecodex.gateway.interfaces import ChatAdapter, IncomingMessage
@@ -23,6 +24,13 @@ from telecodex.shared.models import (
 
 
 logger = logging.getLogger(__name__)
+
+
+class FreeformIntent(str, Enum):
+    ASK_FOR_GOAL = "ask_for_goal"
+    CONTINUE_SESSION = "continue_session"
+    SHOW_STATUS = "show_status"
+    START_SESSION = "start_session"
 
 
 @dataclass
@@ -97,16 +105,18 @@ class GatewayService:
         attachments: list[JobAttachment],
     ) -> None:
         active = self._active_session(channel, conversation_id)
-        if active is None:
-            if not attachments and self._is_placeholder_message_without_goal(text):
-                self.chat.send_message(conversation_id, "좋아요. 질문이나 요청을 한 문장으로 보내주세요.")
-                return
-            self._run_command(channel, conversation_id, user_id, text, attachments=attachments)
+        intent = self._classify_freeform_intent(active, text, attachments)
+        if intent == FreeformIntent.ASK_FOR_GOAL:
+            self.chat.send_message(conversation_id, "좋아요. 질문이나 요청을 한 문장으로 보내주세요.")
             return
-        if not attachments and self._is_status_like_message(text):
+        if intent == FreeformIntent.SHOW_STATUS:
             self._status_command(channel, conversation_id)
             return
-        if self._should_start_new_session_from_active(active, text, attachments):
+        if intent == FreeformIntent.START_SESSION:
+            self._run_command(channel, conversation_id, user_id, text, attachments=attachments)
+            return
+
+        if active is None:
             self._run_command(channel, conversation_id, user_id, text, attachments=attachments)
             return
         self.worker.continue_session(active.summary.session_id, SessionContinueRequest(text=text, attachments=attachments))
@@ -364,130 +374,94 @@ class GatewayService:
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
 
     @staticmethod
-    def _is_placeholder_message_without_goal(text: str) -> bool:
-        normalized = text.strip().casefold()
-        if not normalized:
-            return True
-        placeholders = {
-            "다시 질문할게",
-            "다시 물어볼게",
-            "질문할게",
-            "잠깐만",
-            "잠시만",
-            "잠만",
-            "다시",
-            "다시요",
-        }
-        return normalized in placeholders
-
-    @staticmethod
-    def _is_status_like_message(text: str) -> bool:
-        normalized = text.strip().casefold()
-        status_messages = {
-            "끝이야",
-            "끝이야?",
-            "안해",
-            "안해?",
-            "하고 있어",
-            "하고 있어?",
-            "됐어",
-            "됐어?",
-            "완료됐어",
-            "완료됐어?",
-            "완료야",
-            "완료야?",
-            "진행중",
-            "진행중?",
-            "진행중이야",
-            "진행중이야?",
-            "어디까지 됐어",
-            "어디까지 됐어?",
-            "진행됐어",
-            "진행됐어?",
-            "작업중",
-            "작업중?",
-            "작업중이야",
-            "작업중이야?",
-        }
-        return normalized in status_messages
-
-    @staticmethod
-    def _should_start_new_session_from_active(
-        active: SessionDetail,
+    def _classify_freeform_intent(
+        active: SessionDetail | None,
         text: str,
         attachments: list[JobAttachment],
-    ) -> bool:
+    ) -> FreeformIntent:
         if attachments:
-            return False
-        if active.summary.state not in {SessionState.PLANNING, SessionState.REVIEWING, SessionState.WAITING_USER}:
-            return False
+            return FreeformIntent.CONTINUE_SESSION if active else FreeformIntent.START_SESSION
 
-        normalized = text.strip().casefold()
-        if not normalized or GatewayService._is_placeholder_message_without_goal(text):
-            return False
+        normalized = GatewayService._normalize_freeform_text(text)
+        if not normalized:
+            return FreeformIntent.ASK_FOR_GOAL
+        if GatewayService._is_low_information_message(normalized):
+            return FreeformIntent.SHOW_STATUS if active else FreeformIntent.ASK_FOR_GOAL
+        if GatewayService._is_session_status_question(normalized):
+            return FreeformIntent.SHOW_STATUS
+        if active and GatewayService._is_new_goal_message(normalized):
+            return FreeformIntent.START_SESSION
+        return FreeformIntent.CONTINUE_SESSION if active else FreeformIntent.START_SESSION
 
-        if GatewayService._looks_like_goal_redirect(normalized):
+    @staticmethod
+    def _normalize_freeform_text(text: str) -> str:
+        return re.sub(r"\s+", " ", text.strip().casefold())
+
+    @staticmethod
+    def _is_low_information_message(normalized: str) -> bool:
+        if not normalized:
             return True
+        return bool(
+            re.fullmatch(
+                r"(다시\s*)?(질문|물어|문의)(할게|할께|해볼게|해볼께)?[.!?。…]*|"
+                r"(잠깐|잠시|잠만|잠깐만|잠시만|대기)[.!?。…]*|"
+                r"다시(요)?[.!?。…]*",
+                normalized,
+            )
+        )
 
-        strong_new_goal_tokens = [
-            "gemini",
-            "codex",
-            "mcp",
-            "ai status",
-            "github",
-            "gitflow",
-            "git flow",
-            "깃허브",
-            "깃플로우",
-            "브랜치 보호",
-            "부산 관광",
-            "뭘 할 수",
-            "무엇을 할 수",
-            "뭐가 문제",
-            "문제지",
-            "설명해",
-            "설명해줘",
-            "알려줘",
-            "what can",
-            "what is",
-            "why",
-            "how",
-            "issue",
-            "problem",
-        ]
-        if any(token in normalized for token in strong_new_goal_tokens):
+    @staticmethod
+    def _is_session_status_question(normalized: str) -> bool:
+        if GatewayService._is_action_request(normalized):
+            return False
+        if len(normalized) > 90:
+            return False
+
+        status_topic = re.search(
+            r"(상태|진행|작업|개발|준비|가능|완료|끝|됐|되는|배포|성공|실패|문제|막히|하고\s*있|안\s*해)",
+            normalized,
+        )
+        if not status_topic:
+            return False
+
+        if GatewayService._is_question_like(normalized):
             return True
+        return bool(re.fullmatch(r".*(완료|끝|됐|진행\s*중|작업\s*중|하고\s*있|안\s*해).*", normalized))
 
+    @staticmethod
+    def _is_new_goal_message(normalized: str) -> bool:
+        if not normalized:
+            return False
+        if GatewayService._has_explicit_redirect(normalized) and GatewayService._has_substantive_request_shape(normalized):
+            return True
+        if GatewayService._is_question_like(normalized) and not GatewayService._is_session_status_question(normalized):
+            return True
         return False
 
     @staticmethod
-    def _looks_like_goal_redirect(normalized: str) -> bool:
-        redirect_markers = [
-            "아니야",
-            "아님",
-            "그게 아니라",
-            "이제 ",
-            "자 ",
-            "다시 ",
-            "새로 ",
-        ]
-        if not any(normalized.startswith(marker) for marker in redirect_markers):
-            return False
-        goal_markers = [
-            "사이트",
-            "프로젝트",
-            "깃허브",
-            "github",
-            "브랜치",
-            "배포",
-            "세팅",
-            "설정",
-            "연결",
-            "개발",
-            "수정",
-            "전략",
-        ]
-        return any(marker in normalized for marker in goal_markers)
+    def _has_explicit_redirect(normalized: str) -> bool:
+        return bool(re.match(r"^(아니|아니야|아님|그게 아니라|이제|자|새로|다시)\b", normalized))
+
+    @staticmethod
+    def _has_substantive_request_shape(normalized: str) -> bool:
+        words = re.findall(r"[\w가-힣]+", normalized)
+        return len(normalized) >= 12 and len(words) >= 3
+
+    @staticmethod
+    def _is_question_like(normalized: str) -> bool:
+        if normalized.endswith("?"):
+            return True
+        return bool(re.search(r"(뭐|무엇|어디|왜|어떻게|언제|누구|가능|할까|될까|인가|나요|는지|니\b)", normalized))
+
+    @staticmethod
+    def _is_action_request(normalized: str) -> bool:
+        return bool(
+            re.search(
+                r"(해줘|해주세요|하자|진행해|진행하자|시작해|시작하자|"
+                r"만들|수정|구현|작성|연결|세팅|설정|배포|분석|정리|리팩토링|테스트)",
+                normalized,
+            )
+        )
 
     def _session_detail_or_none(self, session_id: str) -> SessionDetail | None:
         try:
