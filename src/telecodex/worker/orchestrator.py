@@ -666,7 +666,7 @@ class SessionManager:
         with self._lock:
             active_session_id = self.orchestrator.store.get_active_session(request.channel, request.conversation_id)
             if active_session_id:
-                self._supersede_session(active_session_id)
+                self._supersede_session(active_session_id, request.channel, request.conversation_id)
             session_id = utc_now().strftime("%Y%m%d-%H%M%S-%f")
             document = self.orchestrator.store.create_session(session_id, request, self.cfg.gemini.model or "gemini-2.5-flash")
             summary = document.to_summary(request, str(self.orchestrator.store.shared_goal_path(session_id)))
@@ -810,10 +810,15 @@ class SessionManager:
         runtime.detail = self.orchestrator.process_session(runtime)
         runtime.processing = False
 
-    def _supersede_session(self, session_id: str) -> None:
+    def _supersede_session(self, session_id: str, channel: str = "", conversation_id: str = "") -> None:
         if session_id not in self.sessions:
+            if channel and conversation_id:
+                self.orchestrator.store.set_active_session(channel, conversation_id, None)
             return
         runtime = self.sessions[session_id]
+        if runtime.summary.state.is_terminal:
+            self.orchestrator.store.set_active_session(runtime.summary.channel, runtime.summary.conversation_id, None)
+            return
         runtime.cancel_event.set()
         runtime.summary.state = SessionState.CANCELED
         runtime.summary.verdict = SessionVerdict.FAIL
