@@ -36,6 +36,25 @@ def _build_runtime(orchestrator: WorkerOrchestrator, request: SessionRequest, se
     return SessionRuntimeState(summary=summary, request=request, detail=detail)
 
 
+def test_codex_request_payload_omits_empty_allowlist(tmp_path) -> None:
+    cfg = WorkerConfig(
+        workspace_root=str(tmp_path),
+        runs_dir=str(tmp_path / ".runs"),
+        execution_policy=ExecutionPolicy(allow_commands=[], deny_commands=["rm", "del"]),
+    )
+    orchestrator = WorkerOrchestrator(cfg)
+
+    payload = orchestrator._codex_request_payload(
+        CodexRequest(
+            project_path=str(tmp_path),
+            instruction_for_codex="Run mkdir and ls.",
+            execution_policy=cfg.execution_policy,
+        )
+    )
+
+    assert payload["execution_policy"] == {"deny_commands": ["rm", "del"]}
+
+
 def test_worker_orchestrator_completes_dry_run(tmp_path) -> None:
     cfg = WorkerConfig(
         workspace_root=str(tmp_path),
