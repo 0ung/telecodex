@@ -16,6 +16,7 @@ from telecodex.shared.models import (
     SessionRequest,
     SessionState,
     GeminiStatus,
+    SessionVerdict,
     utc_now,
 )
 from telecodex.worker.orchestrator import SessionManager, SessionRuntimeState, WorkerOrchestrator
@@ -215,6 +216,66 @@ def test_worker_orchestrator_reuses_codex_thread_for_same_conversation(tmp_path,
         orchestrator.process_session(runtime)
 
     assert seen_thread_ids == ["", "thread_1"]
+
+
+def test_session_manager_adds_recent_conversation_context_to_new_session(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    cfg = WorkerConfig(
+        workspace_root=str(tmp_path),
+        runs_dir=str(tmp_path / ".runs"),
+        dry_run=True,
+    )
+    manager = SessionManager(cfg)
+    monkeypatch.setattr(manager, "_start_background_processing", lambda runtime: None)
+
+    previous = manager.create_session(
+        SessionRequest(
+            goal="Create ProjectAlpha in /srv/apps.",
+            requester_id=1,
+            workspace_path=str(tmp_path),
+            channel="telegram",
+            conversation_id="chat-memory",
+        )
+    )
+    previous_runtime = manager.sessions[previous.session_id]
+    previous_runtime.summary.state = SessionState.COMPLETED
+    previous_runtime.summary.verdict = SessionVerdict.DONE
+    previous_runtime.summary.final_summary = "Created ProjectAlpha under /srv/apps."
+    previous_runtime.detail.final_outcome = "Created ProjectAlpha under /srv/apps."
+    previous_runtime.detail.codex_execution = "Created directory /srv/apps/ProjectAlpha."
+    previous_runtime.detail.next_action = "Continue building inside /srv/apps/ProjectAlpha."
+    previous_runtime.detail.user_notes = ["Use the existing server workspace."]
+    manager.orchestrator.store.set_active_session("telegram", "chat-memory", None)
+
+    other = manager.create_session(
+        SessionRequest(
+            goal="Unrelated work.",
+            requester_id=1,
+            workspace_path=str(tmp_path),
+            channel="telegram",
+            conversation_id="other-chat",
+        )
+    )
+    manager.orchestrator.store.set_active_session("telegram", "other-chat", None)
+
+    current = manager.create_session(
+        SessionRequest(
+            goal="Continue the previous setup.",
+            requester_id=1,
+            workspace_path=str(tmp_path),
+            channel="telegram",
+            conversation_id="chat-memory",
+            user_notes=["Current request note."],
+        )
+    )
+
+    current_request = manager.sessions[current.session_id].request
+    assert current_request.user_notes[0] == "Current request note."
+    context_note = current_request.user_notes[-1]
+    assert context_note.startswith("[recent conversation context]")
+    assert previous.session_id in context_note
+    assert "ProjectAlpha" in context_note
+    assert "/srv/apps" in context_note
+    assert other.session_id not in context_note
 
 
 def test_worker_orchestrator_prompts_pin_goal_and_language_guidance(tmp_path) -> None:

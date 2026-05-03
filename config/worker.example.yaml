@@ -6,6 +6,7 @@ max_turns: 6
 max_turns_cap: 6
 dynamic_turn_budget: false
 max_codex_failures: 2
+max_attachment_bytes: 5000000
 dry_run: true
 print_io: false
 worker_token: "replace-me"

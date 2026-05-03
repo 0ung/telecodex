@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from datetime import datetime
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, status
 
@@ -67,10 +68,16 @@ def create_worker_app(cfg: WorkerConfig) -> FastAPI:
         channel: str | None = Query(default=None),
         conversation_id: str | None = Query(default=None),
         active_only: bool = Query(default=False),
+        updated_after: datetime | None = Query(default=None),
         _: None = Depends(authorize),
     ) -> SessionListResponse:
         return SessionListResponse(
-            sessions=manager.list_sessions(channel=channel, conversation_id=conversation_id, active_only=active_only)
+            sessions=manager.list_sessions(
+                channel=channel,
+                conversation_id=conversation_id,
+                active_only=active_only,
+                updated_after=updated_after,
+            )
         )
 
     @app.get("/sessions/{session_id}", response_model=SessionDetail)

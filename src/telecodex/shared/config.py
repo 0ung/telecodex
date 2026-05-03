@@ -35,6 +35,7 @@ class WorkerConfig:
     max_turns_cap: int = 6
     dynamic_turn_budget: bool = False
     max_codex_failures: int = 2
+    max_attachment_bytes: int = 5_000_000
     dry_run: bool = True
     print_io: bool = False
     gemini: AdapterConfig = field(default_factory=lambda: AdapterConfig(protocol="gemini_cli", model="gemini-2.5-flash"))
@@ -89,6 +90,7 @@ def load_worker_config(path: str) -> WorkerConfig:
         max_turns_cap=int(raw.get("max_turns_cap", raw.get("max_turns", 6))),
         dynamic_turn_budget=bool(raw.get("dynamic_turn_budget", False)),
         max_codex_failures=int(raw.get("max_codex_failures", 2)),
+        max_attachment_bytes=int(raw.get("max_attachment_bytes", 5_000_000)),
         dry_run=bool(raw.get("dry_run", True)),
         print_io=bool(raw.get("print_io", False)),
         gemini=gemini,
@@ -195,5 +197,7 @@ def _validate_worker_config(cfg: WorkerConfig) -> None:
         raise ValueError("worker config: max_turns_cap must be >= max_turns")
     if cfg.max_codex_failures < 0:
         raise ValueError("worker config: max_codex_failures must be >= 0")
+    if cfg.max_attachment_bytes <= 0:
+        raise ValueError("worker config: max_attachment_bytes must be > 0")
     Path(cfg.workspace_root).mkdir(parents=True, exist_ok=True)
     Path(cfg.runs_dir).mkdir(parents=True, exist_ok=True)
