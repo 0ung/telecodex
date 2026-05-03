@@ -280,22 +280,23 @@ class WorkerOrchestrator:
                     status=SessionState.EXECUTING.value,
                     active_run_id=run_id,
                 )
+                codex_request = CodexRequest(
+                    project_path=state.request.workspace_path,
+                    instruction_for_codex=instruction,
+                    execution_policy=self.cfg.execution_policy,
+                    commands=self._validated_commands(list(self.cfg.codex.default_commands)),
+                    system_prompt=self._codex_system_prompt(),
+                    session_id=session_id,
+                    shared_goal_path=str(self.store.shared_goal_path(session_id)),
+                    acceptance_criteria=list(state.detail.acceptance_criteria),
+                    latest_gemini_next_action=next_action,
+                    mcp_server=self.mcp_config,
+                    previous_response_id=previous_response_id,
+                    conversation_key=conversation_key,
+                    thread_id=thread_id,
+                )
                 codex_resp, codex_exchange = self.runtime.codex.execute(
-                    CodexRequest(
-                        project_path=state.request.workspace_path,
-                        instruction_for_codex=instruction,
-                        execution_policy=self.cfg.execution_policy,
-                        commands=self._validated_commands(list(self.cfg.codex.default_commands)),
-                        system_prompt=self._codex_system_prompt(),
-                        session_id=session_id,
-                        shared_goal_path=str(self.store.shared_goal_path(session_id)),
-                        acceptance_criteria=list(state.detail.acceptance_criteria),
-                        latest_gemini_next_action=next_action,
-                        mcp_server=self.mcp_config,
-                        previous_response_id=previous_response_id,
-                        conversation_key=conversation_key,
-                        thread_id=thread_id,
-                    ).model_dump(mode="json"),
+                    self._codex_request_payload(codex_request),
                     CodexResult,
                 )
                 previous_response_id = codex_exchange.execution.provider_response_id or previous_response_id
@@ -542,6 +543,13 @@ class WorkerOrchestrator:
             if allow and prefix not in allow:
                 raise RuntimeError(f"command '{prefix}' is not allowed by execution policy")
         return commands
+
+    def _codex_request_payload(self, request: CodexRequest) -> dict[str, object]:
+        payload = request.model_dump(mode="json")
+        policy = payload.get("execution_policy")
+        if isinstance(policy, dict) and not policy.get("allow_commands"):
+            policy.pop("allow_commands", None)
+        return payload
 
     @staticmethod
     def _criteria_for_revised_goal(revised_goal: str, gemini_criteria: list[str]) -> list[str]:

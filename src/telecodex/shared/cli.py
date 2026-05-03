@@ -792,6 +792,7 @@ def _render_codex_prompt(request_json: str) -> str:
         "- Report only valid JSON.\n"
         "- Prefer status=completed when the requested work is finished for this turn.\n"
         "- Use waiting_for_input when you are blocked on a human decision.\n"
+        "- Treat a missing or empty execution_policy.allow_commands as no allowlist; use any command not listed in deny_commands.\n"
         "- changed_files and commands_run must reflect what actually happened.\n"
         "- Only mark verified_acceptance_criteria when your changes or verification genuinely support them.\n"
         "- proposed_completion should be true only when the current implementation looks ready for Gemini review.\n"

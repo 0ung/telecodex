@@ -4,6 +4,8 @@ import base64
 from dataclasses import dataclass
 from typing import Any
 
+import httpx
+
 from telecodex.gateway.interfaces import IncomingMessage
 from telecodex.shared.http_client import ResilientHttpClient
 from telecodex.shared.models import JobAttachment, infer_mime_type
@@ -59,7 +61,15 @@ class TelegramAdapter:
         }
         if offset is not None:
             payload["offset"] = offset
-        response = self._http().get(f"{self.base_url}/getUpdates", params=payload, retryable=True)
+        try:
+            response = self._http().get(
+                f"{self.base_url}/getUpdates",
+                params=payload,
+                retryable=True,
+                timeout=max(self.timeout_sec, timeout_sec) + 5,
+            )
+        except httpx.TimeoutException:
+            return []
         response.raise_for_status()
         body = response.json()
         return body.get("result", [])
