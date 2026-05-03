@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 import time
 from unittest.mock import patch
 
@@ -215,3 +216,26 @@ def test_worker_app_manages_mcp_lifecycle(tmp_path) -> None:
 
         start.assert_called_once()
         shutdown.assert_called_once()
+
+
+def test_worker_api_filters_sessions_by_updated_after(tmp_path) -> None:
+    client = TestClient(create_worker_app(_build_cfg(tmp_path)))
+    created = client.post(
+        "/sessions",
+        headers={"X-Worker-Token": "secret"},
+        json={
+            "goal": "Run",
+            "requester_id": 1,
+            "workspace_path": str(tmp_path),
+            "channel": "telegram",
+            "conversation_id": "chat-3",
+            "text_only": True,
+            "requires_private_network": True,
+        },
+    )
+    assert created.status_code == 201
+    time.sleep(0.2)
+    future = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    filtered = client.get("/sessions", headers={"X-Worker-Token": "secret"}, params={"updated_after": future})
+    assert filtered.status_code == 200
+    assert filtered.json()["sessions"] == []

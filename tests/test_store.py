@@ -36,3 +36,35 @@ def test_file_store_writes_expected_artifacts(tmp_path) -> None:
     assert (tmp_path / "run-1" / "summary.json").exists()
     assert (tmp_path / "run-1" / "attachments" / "01-photo.jpg").exists()
     assert report_path.endswith("final-report.md")
+
+
+def test_file_store_rejects_invalid_attachment_payload(tmp_path) -> None:
+    store = FileRunStore(str(tmp_path), "run-2")
+    request = JobRequest(
+        goal="goal",
+        requester_id=1,
+        workspace_path=".",
+        attachments=[JobAttachment(kind="file", file_name="bad.txt", content_base64="%%%")],
+    )
+    try:
+        store.save_job_request(request)
+    except RuntimeError as exc:
+        assert "invalid attachment payload" in str(exc)
+    else:
+        raise AssertionError("expected invalid attachment payload to raise RuntimeError")
+
+
+def test_file_store_rejects_oversized_attachment(tmp_path) -> None:
+    store = FileRunStore(str(tmp_path), "run-3", max_attachment_bytes=2)
+    request = JobRequest(
+        goal="goal",
+        requester_id=1,
+        workspace_path=".",
+        attachments=[JobAttachment(kind="file", file_name="big.txt", content_base64="aGVsbG8=")],
+    )
+    try:
+        store.save_job_request(request)
+    except RuntimeError as exc:
+        assert "exceeds max size" in str(exc)
+    else:
+        raise AssertionError("expected oversized attachment to raise RuntimeError")

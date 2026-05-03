@@ -5,6 +5,7 @@ import json
 import logging
 import re
 from dataclasses import dataclass, field
+from datetime import datetime
 from threading import Event, Lock, Thread
 
 from telecodex.gateway.interfaces import ChatAdapter, IncomingMessage
@@ -19,8 +20,8 @@ from telecodex.shared.models import (
     SessionRequest,
     SessionState,
     truncate_text,
+    utc_now,
 )
-
 
 logger = logging.getLogger(__name__)
 
@@ -34,13 +35,27 @@ class GatewayService:
     _push_state_primed: bool = field(default=False, init=False, repr=False)
     _push_lock: Lock = field(default_factory=Lock, init=False, repr=False)
     _watcher_stop: Event = field(default_factory=Event, init=False, repr=False)
+    _service_stop: Event = field(default_factory=Event, init=False, repr=False)
     _watcher_thread: Thread | None = field(default=None, init=False, repr=False)
+    _last_push_check: datetime | None = field(default=None, init=False, repr=False)
 
     def poll_forever(self) -> None:
-        self._ensure_update_watcher()
-        while True:
+        self.start()
+        while not self._service_stop.is_set():
             for message in self.chat.poll_messages(timeout_sec=self.cfg.poll_timeout_sec):
+                if self._service_stop.is_set():
+                    return
                 self._handle_message(message)
+
+    def start(self) -> None:
+        self._service_stop.clear()
+        self._ensure_update_watcher()
+
+    def stop(self, timeout_sec: float = 2.0) -> None:
+        self._service_stop.set()
+        self._watcher_stop.set()
+        if self._watcher_thread and self._watcher_thread.is_alive():
+            self._watcher_thread.join(timeout=timeout_sec)
 
     def _handle_message(self, message: IncomingMessage) -> None:
         if not message.is_direct_message or message.sender_id not in self.cfg.allowed_user_ids:
@@ -284,12 +299,15 @@ class GatewayService:
                 continue
 
     def _push_session_updates_once(self) -> None:
-        sessions = self.worker.list_sessions().sessions[:20]
+        sessions = self.worker.list_sessions(updated_after=self._last_push_check).sessions[:20]
+        max_seen = self._last_push_check
         for summary in sessions:
             if summary.channel != self.cfg.channel_provider:
                 continue
             if not summary.conversation_id:
                 continue
+            if max_seen is None or summary.updated_at > max_seen:
+                max_seen = summary.updated_at
             detail = self._session_detail_or_none(summary.session_id)
             if detail is None or not self._should_push_session_update(detail):
                 continue
@@ -302,6 +320,10 @@ class GatewayService:
                     continue
                 self._push_state[detail.summary.session_id] = (updated_at, digest)
             self.chat.send_message(detail.summary.conversation_id, body)
+        if max_seen is None:
+            self._last_push_check = utc_now()
+        else:
+            self._last_push_check = max_seen
 
     def _remember_session_snapshot(self, detail: SessionDetail) -> None:
         body = self._format_session_update(detail)

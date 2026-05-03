@@ -1,15 +1,17 @@
 from __future__ import annotations
 
-import json
 import base64
+import binascii
+import json
 from pathlib import Path
 
 from telecodex.shared.models import AdapterExchange, JobRequest, RollingSummary, RunMetadata
 
 
 class FileRunStore:
-    def __init__(self, runs_root: str, run_id: str) -> None:
+    def __init__(self, runs_root: str, run_id: str, max_attachment_bytes: int = 5_000_000) -> None:
         self.run_id = run_id
+        self.max_attachment_bytes = max_attachment_bytes
         self.run_dir = Path(runs_root) / run_id
         self.gemini_dir = self.run_dir / "gemini"
         self.codex_dir = self.run_dir / "codex"
@@ -42,7 +44,15 @@ class FileRunStore:
             if not attachment.content_base64:
                 continue
             file_path = self.attachments_dir / f"{index:02d}-{attachment.safe_file_name}"
-            file_path.write_bytes(base64.b64decode(attachment.content_base64))
+            try:
+                payload = base64.b64decode(attachment.content_base64, validate=True)
+            except (ValueError, binascii.Error) as exc:
+                raise RuntimeError(f"invalid attachment payload for {attachment.file_name}") from exc
+            if len(payload) > self.max_attachment_bytes:
+                raise RuntimeError(
+                    f"attachment {attachment.file_name} exceeds max size of {self.max_attachment_bytes} bytes"
+                )
+            file_path.write_bytes(payload)
 
     def _save_exchange(self, target_dir: Path, turn: int, exchange: AdapterExchange) -> None:
         (target_dir / f"turn-{turn:02d}-request.json").write_text(exchange.request_json, encoding="utf-8")
