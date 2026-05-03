@@ -64,6 +64,38 @@ def test_gemini_cli_adapter_extracts_dict_response_payload() -> None:
     assert parsed.summary_for_user == "dictionary payload"
 
 
+def test_gemini_cli_adapter_extracts_bulletized_json_payload() -> None:
+    adapter = JsonCliAdapter(
+        "gemini",
+        AdapterConfig(protocol="gemini_cli", command="gemini", model="gemini-2.5-flash"),
+        dry_run=False,
+    )
+    stdout = json.dumps(
+        {
+            "session_id": "s1",
+            "response": """
+{
+- "status": "continue",
+- "summary_for_user": "구조화 응답을 복구합니다.",
+- "instruction_for_codex": "internal tool instruction",
+- "acceptance_criteria": [
+- "불릿 형태의 JSON을 파싱한다."
+- ],
+- "reason": "test"
+}
+""",
+            "stats": {},
+        }
+    )
+
+    response_json = adapter._extract_response_json(stdout)  # noqa: SLF001
+    parsed = GeminiResponse.model_validate(json.loads(response_json))
+
+    assert parsed.status.value == "continue"
+    assert parsed.summary_for_user == "구조화 응답을 복구합니다."
+    assert parsed.instruction_for_codex == "internal tool instruction"
+
+
 def test_gemini_cli_adapter_falls_back_from_plain_text_response() -> None:
     adapter = JsonCliAdapter(
         "gemini",

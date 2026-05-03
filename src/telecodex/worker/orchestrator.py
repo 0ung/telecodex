@@ -142,7 +142,6 @@ class WorkerOrchestrator:
         final_reason = ""
         final_summary = ""
         completed_criteria = list(state.detail.completed_acceptance_criteria)
-
         try:
             for local_turn in range(1, self.cfg.max_turns + 1):
                 global_turn = len(state.detail.turns) + 1
@@ -159,6 +158,7 @@ class WorkerOrchestrator:
                     status=gemini_state.value,
                     active_run_id=run_id,
                 )
+                latest_user_input = state.request.user_notes[-1] if state.request.user_notes else ""
                 gemini_resp, gemini_exchange = self.runtime.gemini.execute(
                     GeminiRequest(
                         session_id=session_id,
@@ -166,6 +166,7 @@ class WorkerOrchestrator:
                         current_summary=rolling.current_summary,
                         acceptance_criteria=list(state.detail.acceptance_criteria),
                         user_notes=list(state.request.user_notes),
+                        latest_user_input=latest_user_input,
                         shared_goal_path=str(self.store.shared_goal_path(session_id)),
                         latest_codex_result=latest_codex,
                         remaining_turns=self.cfg.max_turns - local_turn + 1,
@@ -189,10 +190,7 @@ class WorkerOrchestrator:
                         )
                     )
                     completed_criteria = []
-                    resolved_criteria = merge_unique_items(
-                        gemini_resp.acceptance_criteria,
-                        derive_acceptance_criteria(revised_goal),
-                    )
+                    resolved_criteria = self._criteria_for_revised_goal(revised_goal, gemini_resp.acceptance_criteria)
                 else:
                     resolved_criteria = merge_unique_items(
                         state.detail.acceptance_criteria,
@@ -206,6 +204,7 @@ class WorkerOrchestrator:
                     completed_criteria,
                     gemini_resp.completed_acceptance_criteria,
                 )
+                completed_criteria = self._filter_completed_criteria(completed_criteria, resolved_criteria)
                 verdict = resolve_session_verdict(gemini_resp)
                 gemini_plan = gemini_resp.gemini_plan.strip() or gemini_resp.summary_for_user.strip()
                 gemini_review = gemini_resp.review_notes.strip() or gemini_resp.reason.strip() or gemini_resp.summary_for_user.strip()
@@ -226,12 +225,15 @@ class WorkerOrchestrator:
                 self._audit(state, "gemini", f"turn {global_turn} completed with verdict={verdict.value}")
 
                 if verdict == SessionVerdict.DONE:
+                    completed_criteria = self._completed_criteria_for_done(resolved_criteria, completed_criteria)
                     final_status = FinalStatus.DONE
                     final_reason = gemini_resp.reason.strip() or "gemini marked the goal complete"
                     final_summary = gemini_resp.summary_for_user.strip() or next_action
                     self.mcp_service.session_write_gemini_sections(
                         session_id=session_id,
                         final_outcome=final_summary,
+                        acceptance_criteria=resolved_criteria,
+                        completed_acceptance_criteria=completed_criteria,
                         verdict=SessionVerdict.DONE.value,
                         status=SessionState.COMPLETED.value,
                     )
@@ -306,16 +308,21 @@ class WorkerOrchestrator:
                 store.save_codex(local_turn, codex_exchange)
                 self._audit(state, "codex", f"turn {global_turn} completed with status={codex_resp.status.value}")
 
+                codex_completed_criteria = self._filter_completed_criteria(
+                    codex_resp.verified_acceptance_criteria,
+                    state.detail.acceptance_criteria,
+                )
                 completed_criteria = merge_unique_items(
                     completed_criteria,
-                    codex_resp.verified_acceptance_criteria,
+                    codex_completed_criteria,
                 )
+                completed_criteria = self._filter_completed_criteria(completed_criteria, state.detail.acceptance_criteria)
                 self.mcp_service.session_write_codex_sections(
                     session_id=session_id,
                     codex_plan=codex_resp.codex_plan.strip() or instruction,
                     codex_execution=self._format_codex_execution(codex_resp),
                     codex_verification=self._format_codex_verification(codex_resp),
-                    completed_acceptance_criteria=codex_resp.verified_acceptance_criteria,
+                    completed_acceptance_criteria=codex_completed_criteria,
                 )
 
                 if codex_resp.status == CodexStatus.FAILED:
@@ -537,6 +544,35 @@ class WorkerOrchestrator:
         return commands
 
     @staticmethod
+    def _criteria_for_revised_goal(revised_goal: str, gemini_criteria: list[str]) -> list[str]:
+        criteria = merge_unique_items(gemini_criteria)
+        if criteria:
+            return criteria
+        return derive_acceptance_criteria(revised_goal)
+
+    @staticmethod
+    def _filter_completed_criteria(completed: list[str], acceptance_criteria: list[str]) -> list[str]:
+        if not acceptance_criteria:
+            return merge_unique_items(completed)
+        accepted_by_key = {item.casefold(): item for item in acceptance_criteria}
+        filtered: list[str] = []
+        seen: set[str] = set()
+        for item in completed:
+            key = item.strip().casefold()
+            if not key or key in seen or key not in accepted_by_key:
+                continue
+            seen.add(key)
+            filtered.append(accepted_by_key[key])
+        return filtered
+
+    @classmethod
+    def _completed_criteria_for_done(cls, acceptance_criteria: list[str], completed: list[str]) -> list[str]:
+        filtered = cls._filter_completed_criteria(completed, acceptance_criteria)
+        if not acceptance_criteria:
+            return filtered
+        return merge_unique_items(filtered, acceptance_criteria)
+
+    @staticmethod
     def _gemini_system_prompt() -> str:
         return (
             "You are the session planner and reviewer. Read the shared session document before every turn and keep the "
@@ -552,6 +588,10 @@ class WorkerOrchestrator:
             "Codex, or MCP can do, answer it directly in the user's language and prefer a final response instead of "
             "sending Codex to code. In this system, MCP is the structured tool bridge used to read and update shared "
             "session state such as shared_goal.md, so do not describe MCP as unknown or unconfirmed. "
+            "Treat latest_user_input as the user's newest answer to your previous question. Do not ask again for "
+            "information that appears in latest_user_input or user_notes; merge partial answers across turns. "
+            "When a user provides a concrete value such as a folder name or path, proceed with that value and use the "
+            "workspace root as the default location unless the request explicitly says otherwise. "
             "If you need user input, ask only for the minimum missing information required for the next step, and format "
             "question_for_user so the gateway can show it as a short introduction followed by concise bullet-ready items. "
             "Return exactly one verdict: continue, done, ask_user, or fail. Only use ask_user when Codex truly cannot "
@@ -634,7 +674,7 @@ class SessionManager:
             request = self._with_recent_conversation_context(request)
             active_session_id = self.orchestrator.store.get_active_session(request.channel, request.conversation_id)
             if active_session_id:
-                self._supersede_session(active_session_id)
+                self._supersede_session(active_session_id, request.channel, request.conversation_id)
             session_id = utc_now().strftime("%Y%m%d-%H%M%S-%f")
             document = self.orchestrator.store.create_session(session_id, request, self.cfg.gemini.model or "gemini-2.5-flash")
             summary = document.to_summary(request, str(self.orchestrator.store.shared_goal_path(session_id)))
@@ -830,10 +870,15 @@ class SessionManager:
         runtime.detail = self.orchestrator.process_session(runtime)
         runtime.processing = False
 
-    def _supersede_session(self, session_id: str) -> None:
+    def _supersede_session(self, session_id: str, channel: str = "", conversation_id: str = "") -> None:
         if session_id not in self.sessions:
+            if channel and conversation_id:
+                self.orchestrator.store.set_active_session(channel, conversation_id, None)
             return
         runtime = self.sessions[session_id]
+        if runtime.summary.state.is_terminal:
+            self.orchestrator.store.set_active_session(runtime.summary.channel, runtime.summary.conversation_id, None)
+            return
         runtime.cancel_event.set()
         runtime.summary.state = SessionState.CANCELED
         runtime.summary.verdict = SessionVerdict.FAIL

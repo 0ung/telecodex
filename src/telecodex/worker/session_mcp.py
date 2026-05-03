@@ -73,8 +73,10 @@ class SessionMcpService:
             timestamp = document.updated_at or ""
             document.user_notes.append(f"{timestamp} {cleaned}".strip())
             request.user_notes = list(document.user_notes)
+            document.next_action = ""
         if attachments:
             request.attachments.extend(JobAttachment.model_validate(item) for item in attachments)
+            document.next_action = ""
         self.store.save_request(session_id, request)
         self.store.save_document(document, request)
         return self.session_read(session_id)
@@ -124,7 +126,11 @@ class SessionMcpService:
             document.verdict = SessionVerdict(verdict)
         if status:
             document.status = SessionState(status)
+        if final_outcome or document.status.is_terminal:
+            document.next_action = ""
         self.store.save_document(document, request)
+        if document.status.is_terminal:
+            self.store.set_active_session(document.channel, document.conversation_id, None)
         return self.session_read(session_id)
 
     def session_write_codex_sections(

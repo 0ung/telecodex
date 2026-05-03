@@ -621,17 +621,66 @@ class JsonCliAdapter:
 
 def _extract_last_json_blob(text: str) -> str:
     cleaned = _strip_code_fences(text.strip())
+    for candidate in _json_blob_candidates(cleaned):
+        try:
+            json.loads(candidate)
+            return candidate
+        except json.JSONDecodeError:
+            continue
+
     lines = cleaned.splitlines()
     for start in range(len(lines)):
         chunk = "\n".join(lines[start:]).strip()
         if not chunk:
             continue
-        try:
-            json.loads(chunk)
-            return chunk
-        except json.JSONDecodeError:
-            continue
+        for candidate in _json_blob_candidates(chunk):
+            try:
+                json.loads(candidate)
+                return candidate
+            except json.JSONDecodeError:
+                continue
     raise CliExecutionError("stdout did not contain a valid JSON payload")
+
+
+def _json_blob_candidates(text: str) -> list[str]:
+    stripped = text.strip()
+    if not stripped:
+        return []
+
+    candidates: list[str] = []
+    for variant in (stripped, _strip_markdown_json_bullets(stripped)):
+        if not variant or variant in candidates:
+            continue
+        candidates.append(variant)
+
+        object_start = variant.find("{")
+        object_end = variant.rfind("}")
+        if 0 <= object_start < object_end:
+            candidates.append(variant[object_start : object_end + 1].strip())
+
+        array_start = variant.find("[")
+        array_end = variant.rfind("]")
+        if 0 <= array_start < array_end:
+            candidates.append(variant[array_start : array_end + 1].strip())
+
+    unique: list[str] = []
+    for candidate in candidates:
+        if candidate and candidate not in unique:
+            unique.append(candidate)
+    return unique
+
+
+def _strip_markdown_json_bullets(text: str) -> str:
+    lines: list[str] = []
+    for line in text.splitlines():
+        stripped = line.lstrip()
+        indent = line[: len(line) - len(stripped)]
+        if stripped.startswith(("- ", "* ")):
+            candidate = stripped[2:].lstrip()
+            if candidate.startswith(('"', "{", "}", "[", "]")):
+                line = indent + candidate
+        lines.append(line)
+    return "\n".join(lines)
 
 
 def _extract_gemini_response_json(text: str) -> str:
@@ -754,66 +803,6 @@ def _render_codex_prompt(request_json: str) -> str:
 
 def _coerce_gemini_plain_text_response(text: str) -> str:
     compact = _compact_plain_text(text)
-    lowered = compact.casefold()
-
-    if any(token in lowered for token in ["알려주세요", "제공해", "provide", "need", "필요", "which", "what is your"]):
-        payload = {
-            "status": "ask_user",
-            "summary_for_user": compact,
-            "instruction_for_codex": "",
-            "acceptance_criteria": [],
-            "completed_acceptance_criteria": [],
-            "revised_goal": "",
-            "verdict": "ask_user",
-            "gemini_plan": compact,
-            "review_notes": compact,
-            "next_action": compact,
-            "question_for_user": compact,
-            "reason": "gemini_cli_plain_text_fallback",
-            "suggested_max_turns": None,
-        }
-        return json.dumps(payload, ensure_ascii=False)
-
-    if any(
-        token in lowered
-        for token in [
-            "implement ",
-            "update ",
-            "write ",
-            "run ",
-            "fix ",
-            "refactor ",
-            "구현해",
-            "구현하세요",
-            "수정해",
-            "수정하세요",
-            "작성해",
-            "작성하세요",
-            "실행해",
-            "실행하세요",
-            "진행해",
-            "진행하세요",
-            "수행해",
-            "수행하세요",
-        ]
-    ):
-        payload = {
-            "status": "continue",
-            "summary_for_user": compact,
-            "instruction_for_codex": compact,
-            "acceptance_criteria": [],
-            "completed_acceptance_criteria": [],
-            "revised_goal": "",
-            "verdict": "continue",
-            "gemini_plan": compact,
-            "review_notes": compact,
-            "next_action": compact,
-            "question_for_user": "",
-            "reason": "gemini_cli_plain_text_fallback",
-            "suggested_max_turns": None,
-        }
-        return json.dumps(payload, ensure_ascii=False)
-
     payload = {
         "status": "done",
         "summary_for_user": compact,

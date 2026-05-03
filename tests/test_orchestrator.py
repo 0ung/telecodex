@@ -94,6 +94,7 @@ def test_worker_orchestrator_completes_dry_run(tmp_path) -> None:
     assert result.latest_job.result is not None
     assert result.latest_job.result.final_summary == "The goal is complete."
     assert (tmp_path / ".runs" / "_sessions" / "session-1" / "shared_goal.md").exists()
+    assert orchestrator.store.get_active_session("telegram", "chat-1") == ""
 
 
 def test_worker_orchestrator_waits_for_user_when_gemini_requests_input(tmp_path) -> None:
@@ -338,6 +339,152 @@ def test_worker_orchestrator_can_reframe_goal_from_new_user_message(tmp_path) ->
     assert "각 구성 요소의 역할을 설명한다" in result.acceptance_criteria
     assert "이력서" not in " ".join(result.acceptance_criteria)
     assert result.summary.state == SessionState.COMPLETED
+
+
+def test_worker_orchestrator_replaces_goal_criteria_on_revised_done(tmp_path) -> None:
+    cfg = WorkerConfig(
+        workspace_root=str(tmp_path),
+        runs_dir=str(tmp_path / ".runs"),
+        dry_run=True,
+        gemini=AdapterConfig(
+            protocol="gemini_cli",
+            model="gemini-2.5-flash",
+            mock_responses=[
+                MockAdapterResponse(
+                    status="done",
+                    verdict="done",
+                    revised_goal="저장소를 프로젝트에 연결합니다.",
+                    summary_for_user="취소된 하위 작업은 제외했고, 저장소 연결만 완료했습니다.",
+                    acceptance_criteria=["저장소가 프로젝트 디렉터리에 연결되어 있습니다."],
+                    completed_acceptance_criteria=["저장소가 프로젝트 디렉터리에 연결되어 있습니다."],
+                )
+            ],
+        ),
+        codex=AdapterConfig(protocol="codex_exec_jsonl", default_commands=["pytest"]),
+        execution_policy=ExecutionPolicy(allow_commands=["pytest"]),
+    )
+    orchestrator = WorkerOrchestrator(cfg)
+    request = SessionRequest(
+        goal="하위 작업을 진행하고 저장소를 연결해줘",
+        requester_id=1,
+        workspace_path=str(tmp_path),
+        channel="telegram",
+        conversation_id="chat-revised-done",
+        acceptance_criteria=["취소된 하위 작업이 완료됩니다.", "저장소가 연결됩니다."],
+        user_notes=["첫 번째 하위 작업은 제외하고 저장소 연결만 진행해줘"],
+    )
+    runtime = _build_runtime(orchestrator, request, "session-revised-done")
+
+    result = orchestrator.process_session(runtime)
+
+    assert result.summary.state == SessionState.COMPLETED
+    assert result.summary.goal == "저장소를 프로젝트에 연결합니다."
+    assert result.acceptance_criteria == ["저장소가 프로젝트 디렉터리에 연결되어 있습니다."]
+    assert result.completed_acceptance_criteria == result.acceptance_criteria
+    assert "취소된 하위 작업" not in " ".join(result.acceptance_criteria)
+
+
+def test_worker_orchestrator_sends_latest_user_input_to_gemini(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    cfg = WorkerConfig(
+        workspace_root=str(tmp_path),
+        runs_dir=str(tmp_path / ".runs"),
+        dry_run=False,
+        gemini=AdapterConfig(protocol="gemini_cli", command="gemini", model="gemini-2.5-flash"),
+        codex=AdapterConfig(protocol="codex_app_server", command="codex"),
+        execution_policy=ExecutionPolicy(),
+    )
+    orchestrator = WorkerOrchestrator(cfg)
+    seen_latest_inputs: list[str] = []
+
+    def fake_execute(payload, response_type):  # noqa: ANN001
+        now = utc_now()
+        request_payload = GeminiRequest.model_validate(payload)
+        seen_latest_inputs.append(request_payload.latest_user_input)
+        result = GeminiResponse(
+            status=GeminiStatus.DONE,
+            verdict="done",
+            revised_goal="프로젝트 루트에 BusanTour 폴더를 생성합니다.",
+            summary_for_user="BusanTour 폴더 생성을 완료 처리합니다.",
+            acceptance_criteria=["프로젝트 루트에 BusanTour 폴더가 준비됩니다."],
+            completed_acceptance_criteria=["프로젝트 루트에 BusanTour 폴더가 준비됩니다."],
+        )
+        exchange = AdapterExchange(
+            request_json="{}",
+            response_json=result.model_dump_json(indent=2),
+            execution=CommandExecution(
+                command="gemini",
+                args=[],
+                stdout="{}",
+                stderr="",
+                exit_code=0,
+                started_at=now,
+                finished_at=now,
+            ),
+        )
+        return result, exchange
+
+    monkeypatch.setattr(orchestrator.runtime.gemini, "execute", fake_execute)
+
+    request = SessionRequest(
+        goal="새로운 폴더를 만들어서 개발을 시작합니다.",
+        requester_id=1,
+        workspace_path=str(tmp_path),
+        channel="telegram",
+        conversation_id="chat-latest-input",
+        user_notes=["BusanTour", "BusanTour\n프로젝트 루트로 빼줘"],
+    )
+    runtime = _build_runtime(orchestrator, request, "session-latest-input")
+
+    orchestrator.process_session(runtime)
+
+    assert seen_latest_inputs == ["BusanTour\n프로젝트 루트로 빼줘"]
+
+
+def test_session_manager_does_not_cancel_stale_completed_active_session(tmp_path, monkeypatch) -> None:  # noqa: ANN001
+    cfg = WorkerConfig(
+        workspace_root=str(tmp_path),
+        runs_dir=str(tmp_path / ".runs"),
+        dry_run=True,
+    )
+    manager = SessionManager(cfg)
+    monkeypatch.setattr(manager, "_start_background_processing", lambda runtime: None)
+
+    old_request = SessionRequest(
+        goal="완료된 이전 목표",
+        requester_id=1,
+        workspace_path=str(tmp_path),
+        channel="telegram",
+        conversation_id="chat-stale-active",
+    )
+    old_document = manager.orchestrator.store.create_session("old-session", old_request, "gemini-2.5-flash")
+    manager.orchestrator.mcp_service.session_write_gemini_sections(
+        "old-session",
+        final_outcome="이전 목표는 이미 완료되었습니다.",
+        verdict="done",
+        status="completed",
+    )
+    manager.orchestrator.store.set_active_session("telegram", "chat-stale-active", "old-session")
+    old_document = manager.orchestrator.store.load_document("old-session")
+    old_summary = old_document.to_summary(old_request, str(manager.orchestrator.store.shared_goal_path("old-session")))
+    manager.sessions["old-session"] = SessionRuntimeState(
+        summary=old_summary,
+        request=old_request,
+        detail=SessionDetail(summary=old_summary, request=old_request),
+    )
+
+    new_summary = manager.create_session(
+        SessionRequest(
+            goal="새 목표",
+            requester_id=1,
+            workspace_path=str(tmp_path),
+            channel="telegram",
+            conversation_id="chat-stale-active",
+        )
+    )
+
+    assert manager.sessions["old-session"].summary.state == SessionState.COMPLETED
+    assert manager.orchestrator.store.load_document("old-session").status == SessionState.COMPLETED
+    assert manager.orchestrator.store.get_active_session("telegram", "chat-stale-active") == new_summary.session_id
 
 
 def test_worker_orchestrator_logs_runtime_errors(tmp_path, monkeypatch, caplog) -> None:  # noqa: ANN001

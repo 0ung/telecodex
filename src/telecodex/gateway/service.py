@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import re
 from dataclasses import dataclass, field
 from datetime import datetime
 from threading import Event, Lock, Thread
@@ -112,25 +113,22 @@ class GatewayService:
     ) -> None:
         active = self._active_session(channel, conversation_id)
         if active is None:
-            if not attachments and self._is_placeholder_message_without_goal(text):
-                self.chat.send_message(conversation_id, "좋아요. 질문이나 요청을 한 문장으로 보내주세요.")
-                return
-            self._run_command(channel, conversation_id, user_id, text, attachments=attachments)
-            return
-        if not attachments and self._is_status_like_message(text):
-            self._status_command(channel, conversation_id)
-            return
-        if self._should_start_new_session_from_active(active, text, attachments):
             self._run_command(channel, conversation_id, user_id, text, attachments=attachments)
             return
         self.worker.continue_session(active.summary.session_id, SessionContinueRequest(text=text, attachments=attachments))
         detail = self._session_detail_or_none(active.summary.session_id) or active
         if active.summary.state == SessionState.WAITING_USER:
-            body = self._format_session_brief(detail, f"`{active.summary.session_id}` 세션에 최신 입력을 반영했습니다.")
+            body = self._format_input_ack(
+                active.summary.session_id,
+                "최신 입력을 반영했습니다. 이어서 처리 중입니다.",
+            )
             self.chat.send_message(conversation_id, body)
             self._remember_session_snapshot(detail)
             return
-        body = self._format_session_brief(detail, f"`{active.summary.session_id}` 세션에 메모를 추가했습니다.")
+        body = self._format_input_ack(
+            active.summary.session_id,
+            "메모를 추가했습니다. 다음 검토 턴에 반영하겠습니다.",
+        )
         self.chat.send_message(conversation_id, body)
         self._remember_session_snapshot(detail)
 
@@ -381,83 +379,17 @@ class GatewayService:
         return GatewayService._format_session_brief(detail, title)
 
     @staticmethod
+    def _format_input_ack(session_id: str, message: str) -> str:
+        return "\n".join(
+            [
+                f"`{session_id}` 세션에 입력을 받았습니다.",
+                message,
+            ]
+        )
+
+    @staticmethod
     def _message_digest(text: str) -> str:
         return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-    @staticmethod
-    def _is_placeholder_message_without_goal(text: str) -> bool:
-        normalized = text.strip().casefold()
-        if not normalized:
-            return True
-        placeholders = {
-            "다시 질문할게",
-            "다시 물어볼게",
-            "질문할게",
-            "잠깐만",
-            "잠시만",
-            "잠만",
-            "다시",
-            "다시요",
-        }
-        return normalized in placeholders
-
-    @staticmethod
-    def _is_status_like_message(text: str) -> bool:
-        normalized = text.strip().casefold()
-        status_messages = {
-            "끝이야",
-            "끝이야?",
-            "됐어",
-            "됐어?",
-            "완료됐어",
-            "완료됐어?",
-            "완료야",
-            "완료야?",
-            "어디까지 됐어",
-            "어디까지 됐어?",
-            "진행됐어",
-            "진행됐어?",
-        }
-        return normalized in status_messages
-
-    @staticmethod
-    def _should_start_new_session_from_active(
-        active: SessionDetail,
-        text: str,
-        attachments: list[JobAttachment],
-    ) -> bool:
-        if attachments:
-            return False
-        if active.summary.state not in {SessionState.PLANNING, SessionState.REVIEWING, SessionState.WAITING_USER}:
-            return False
-
-        normalized = text.strip().casefold()
-        if not normalized or GatewayService._is_placeholder_message_without_goal(text):
-            return False
-
-        strong_new_goal_tokens = [
-            "gemini",
-            "codex",
-            "mcp",
-            "ai status",
-            "뭘 할 수",
-            "무엇을 할 수",
-            "뭐가 문제",
-            "문제지",
-            "설명해",
-            "설명해줘",
-            "알려줘",
-            "what can",
-            "what is",
-            "why",
-            "how",
-            "issue",
-            "problem",
-        ]
-        if any(token in normalized for token in strong_new_goal_tokens):
-            return True
-
-        return False
 
     def _session_detail_or_none(self, session_id: str) -> SessionDetail | None:
         try:
@@ -482,6 +414,7 @@ class GatewayService:
 
     @staticmethod
     def _format_session_brief(detail: SessionDetail, title: str) -> str:
+        focus_lines = GatewayService._focus_lines(detail)
         lines = [
             title,
             f"상태: {GatewayService._state_label(detail.summary.state)}",
@@ -491,12 +424,11 @@ class GatewayService:
         progress_line = GatewayService._progress_line(detail)
         if progress_line:
             lines.append(progress_line)
-        summary_lines = GatewayService._summary_lines(detail)
+        summary_lines = GatewayService._summary_lines(detail, exclude_texts=focus_lines)
         if summary_lines:
             lines.append("")
             lines.append("진행 요약")
             lines.extend(summary_lines)
-        focus_lines = GatewayService._focus_lines(detail)
         if focus_lines:
             lines.append("")
             lines.append(GatewayService._focus_heading(detail))
@@ -505,6 +437,7 @@ class GatewayService:
 
     @staticmethod
     def _format_session_status(detail: SessionDetail) -> str:
+        focus_lines = GatewayService._focus_lines(detail)
         lines = [
             f"최근 세션 `{detail.summary.session_id}`",
             f"상태: {GatewayService._state_label(detail.summary.state)}",
@@ -514,7 +447,7 @@ class GatewayService:
         progress_line = GatewayService._progress_line(detail)
         if progress_line:
             lines.append(progress_line)
-        summary_lines = GatewayService._summary_lines(detail)
+        summary_lines = GatewayService._summary_lines(detail, exclude_texts=focus_lines)
         if summary_lines:
             lines.append("")
             lines.append("진행 요약")
@@ -525,12 +458,13 @@ class GatewayService:
             for item in detail.acceptance_criteria[:5]:
                 marker = "x" if item in detail.completed_acceptance_criteria else " "
                 lines.append(f"- [{marker}] {GatewayService._compact_text(item, limit=260)}")
-        dialogue_lines = GatewayService._recent_dialogue_lines(detail, max_turns=2)
+        dialogue_lines = []
+        if detail.summary.state not in {SessionState.COMPLETED, SessionState.CANCELED}:
+            dialogue_lines = GatewayService._recent_dialogue_lines(detail, max_turns=2)
         if dialogue_lines:
             lines.append("")
             lines.append("최근 대화")
             lines.extend(dialogue_lines)
-        focus_lines = GatewayService._focus_lines(detail)
         if focus_lines:
             lines.append("")
             lines.append(GatewayService._focus_heading(detail))
@@ -539,6 +473,7 @@ class GatewayService:
 
     @staticmethod
     def _format_session_detail(detail: SessionDetail) -> str:
+        focus_lines = GatewayService._focus_lines(detail)
         lines = [
             f"세션 `{detail.summary.session_id}`",
             f"상태: {GatewayService._state_label(detail.summary.state)}",
@@ -550,7 +485,7 @@ class GatewayService:
             lines.append(progress_line)
         if detail.request.attachments:
             lines.append(f"첨부: {len(detail.request.attachments)}개")
-        summary_lines = GatewayService._summary_lines(detail)
+        summary_lines = GatewayService._summary_lines(detail, exclude_texts=focus_lines)
         if summary_lines:
             lines.append("")
             lines.append("진행 요약")
@@ -566,7 +501,6 @@ class GatewayService:
             lines.append("")
             lines.append("대화 기록")
             lines.extend(dialogue_lines)
-        focus_lines = GatewayService._focus_lines(detail)
         if focus_lines:
             lines.append("")
             lines.append(GatewayService._focus_heading(detail))
@@ -591,14 +525,18 @@ class GatewayService:
         return lines
 
     @staticmethod
-    def _summary_lines(detail: SessionDetail) -> list[str]:
+    def _summary_lines(detail: SessionDetail, exclude_texts: list[str] | None = None) -> list[str]:
         lines: list[str] = []
-        seen: set[str] = set()
+        seen = {GatewayService._summary_key(item) for item in (exclude_texts or []) if item.strip()}
         latest_turn = detail.turns[-1] if detail.turns else None
         if detail.final_outcome:
             GatewayService._append_unique_summary(lines, seen, "결과", detail.final_outcome)
+            if detail.summary.state in {SessionState.COMPLETED, SessionState.CANCELED}:
+                return lines
         error_candidate = (detail.error or (detail.latest_job.error if detail.latest_job else "")).strip()
         GatewayService._append_unique_summary(lines, seen, "오류", error_candidate)
+        if detail.summary.state == SessionState.FAILED and lines:
+            return lines
         gemini_candidate = GatewayService._pick_summary(
             latest_turn.gemini.summary_for_user if latest_turn else "",
             detail.gemini_review,
@@ -625,6 +563,8 @@ class GatewayService:
 
     @staticmethod
     def _focus_lines(detail: SessionDetail) -> list[str]:
+        if detail.summary.state.is_terminal:
+            return []
         if detail.summary.state == SessionState.WAITING_USER:
             request_text = detail.next_action or detail.gemini_review or detail.gemini_plan
             if request_text:
@@ -655,11 +595,15 @@ class GatewayService:
         compact = GatewayService._compact_text(value, limit=360)
         if not compact:
             return
-        key = compact.casefold()
+        key = GatewayService._summary_key(compact)
         if key in seen:
             return
         seen.add(key)
         lines.append(f"- {label}: {compact}")
+
+    @staticmethod
+    def _summary_key(text: str) -> str:
+        return " ".join(text.casefold().split())
 
     @staticmethod
     def _latest_block(text: str) -> str:
@@ -702,12 +646,16 @@ class GatewayService:
         stripped = text.strip()
         if not stripped:
             return ""
-        try:
-            payload = json.loads(stripped)
-        except json.JSONDecodeError:
-            return GatewayService._localize_known_english_text(stripped)
+        payload = GatewayService._parse_jsonish_payload(stripped)
+        if payload is None:
+            extracted = GatewayService._extract_display_field_from_jsonish_text(stripped)
+            if extracted:
+                return extracted
+            if GatewayService._looks_like_structured_payload(stripped):
+                return ""
+            return stripped
         extracted = GatewayService._extract_display_text_from_payload(payload)
-        return GatewayService._localize_known_english_text(extracted or stripped)
+        return extracted or stripped
 
     @staticmethod
     def _extract_display_text_from_payload(payload: object) -> str:
@@ -725,21 +673,80 @@ class GatewayService:
                     return nested
             return ""
         if isinstance(payload, str):
-            return GatewayService._localize_known_english_text(payload.strip())
+            return payload.strip()
         return ""
 
     @staticmethod
-    def _localize_known_english_text(text: str) -> str:
-        normalized = " ".join(text.strip().split())
-        replacements = {
-            "The user's goal is too general to proceed. I need to ask for more specific details about the development task they wish to undertake.": (
-                "사용자 목표가 아직 너무 넓어서 바로 진행할 수 없습니다. 어떤 개발 작업을 할지 조금 더 구체적인 설명이 필요합니다."
-            ),
-            "User indicated they want to ask again and provided no new specific goal.": (
-                "사용자가 다시 질문하겠다고 했지만 아직 구체적인 요청은 주지 않았습니다."
-            ),
-        }
-        return replacements.get(normalized, text.strip())
+    def _parse_jsonish_payload(text: str) -> object | None:
+        for candidate in GatewayService._json_text_candidates(text):
+            try:
+                return json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+        return None
+
+    @staticmethod
+    def _json_text_candidates(text: str) -> list[str]:
+        stripped = text.strip()
+        if not stripped:
+            return []
+        variants = [stripped, GatewayService._strip_markdown_json_bullets(stripped)]
+        candidates: list[str] = []
+        for variant in variants:
+            if not variant:
+                continue
+            candidates.append(variant)
+            object_start = variant.find("{")
+            object_end = variant.rfind("}")
+            if 0 <= object_start < object_end:
+                candidates.append(variant[object_start : object_end + 1].strip())
+        unique: list[str] = []
+        for candidate in candidates:
+            if candidate and candidate not in unique:
+                unique.append(candidate)
+        return unique
+
+    @staticmethod
+    def _strip_markdown_json_bullets(text: str) -> str:
+        lines: list[str] = []
+        for line in text.splitlines():
+            stripped = line.lstrip()
+            indent = line[: len(line) - len(stripped)]
+            if stripped.startswith(("- ", "* ")):
+                candidate = stripped[2:].lstrip()
+                if candidate.startswith(('"', "{", "}", "[", "]")):
+                    line = indent + candidate
+            lines.append(line)
+        return "\n".join(lines)
+
+    @staticmethod
+    def _extract_display_field_from_jsonish_text(text: str) -> str:
+        for candidate in GatewayService._json_text_candidates(text):
+            for key in ("summary_for_user", "question_for_user", "next_action", "summary", "reason"):
+                pattern = rf'"{re.escape(key)}"\s*:\s*"((?:\\.|[^"\\])*)"'
+                match = re.search(pattern, candidate, flags=re.DOTALL)
+                if not match:
+                    continue
+                raw_value = match.group(1)
+                try:
+                    value = json.loads(f'"{raw_value}"')
+                except json.JSONDecodeError:
+                    value = raw_value
+                extracted = GatewayService._extract_display_text(str(value))
+                if extracted:
+                    return extracted
+        return ""
+
+    @staticmethod
+    def _looks_like_structured_payload(text: str) -> bool:
+        normalized = text.casefold()
+        return (
+            normalized.startswith(("{", "- {", "* {"))
+            or '"status"' in normalized
+            or '"summary_for_user"' in normalized
+            or '"instruction_for_codex"' in normalized
+            or '"acceptance_criteria"' in normalized
+        )
 
     @staticmethod
     def _state_label(state: SessionState) -> str:
